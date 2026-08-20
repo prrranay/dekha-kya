@@ -4,7 +4,7 @@ import React, { useState } from 'react';
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { Lock, Eye, CheckCircle2, Loader2 } from 'lucide-react';
 
-const API_BASE_URL = 'http://localhost:4000/api';
+const API_BASE_URL = `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000'}/api`;
 
 // Full Screen Google Login Gate Page Component
 function SessionGate({ children }: { children: React.ReactNode }) {

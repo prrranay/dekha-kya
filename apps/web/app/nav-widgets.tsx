@@ -66,7 +66,7 @@ export function UserFooter() {
         <p className="text-[10px] text-zinc-500 truncate">{user.email}</p>
       </div>
       <a
-        href="http://localhost:4000/api/auth/logout"
+        href={`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000'}/api/auth/logout`}
         title="Logout"
         className="p-1.5 text-zinc-400 hover:text-red-500 rounded-lg hover:bg-red-50 transition-all"
       >
