@@ -1,0 +1,12 @@
+{
+  "extends": "../../packages/config/tsconfig.base.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "node",
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "types": ["chrome"],
+    "typeRoots": ["../../node_modules/@types"]
+  },
+  "include": ["src/**/*"]
+}

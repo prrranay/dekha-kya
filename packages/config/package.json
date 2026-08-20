@@ -1,0 +1,7 @@
+{
+  "name": "@gmail-tracker/config",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Shared build configurations for tsconfig and lint rules",
+  "main": ""
+}

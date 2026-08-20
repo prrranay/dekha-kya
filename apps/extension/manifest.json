@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "Dekha Kya? - Gmail Email Tracker",
+  "version": "1.0.0",
+  "description": "Production-quality Gmail recipient-level tracking integration",
+  "permissions": [
+    "activeTab",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://mail.google.com/*",
+    "http://localhost:4000/*"
+  ],
+  "background": {
+    "service_worker": "dist/background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://mail.google.com/*"
+      ],
+      "js": [
+        "dist/content.js"
+      ],
+      "run_at": "document_end"
+    }
+  ]
+}

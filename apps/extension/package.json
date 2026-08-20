@@ -1,0 +1,17 @@
+{
+  "name": "@gmail-tracker/extension",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Chrome Extension for Gmail Tracker",
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.260",
+    "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "@gmail-tracker/shared": "*"
+  }
+}

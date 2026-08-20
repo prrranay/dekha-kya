@@ -1,0 +1,6 @@
+{
+  "extends": "../../.eslintrc.json",
+  "env": {
+    "webextensions": true
+  }
+}
