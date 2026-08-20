@@ -160,9 +160,45 @@ export class AuthController {
       }
 
       // 2. Encrypt access/refresh tokens
-      const encryptedAccess = this.gmailService.encryptToken(tokens.access_token!);
-      const encryptedRefresh = this.gmailService.encryptToken(tokens.refresh_token!);
-      const expiryDate = new Date(tokens.expiry_date!);
+      const encryptedAccess = tokens.access_token ? this.gmailService.encryptToken(tokens.access_token) : null;
+      let encryptedRefresh = tokens.refresh_token ? this.gmailService.encryptToken(tokens.refresh_token) : null;
+      const expiryDate = tokens.expiry_date ? new Date(tokens.expiry_date) : new Date(Date.now() + 3600 * 1000);
+
+      // If refresh_token was NOT returned (since it's a re-login with existing permissions),
+      // look up the existing refresh token in the database
+      if (!encryptedRefresh) {
+        const existingAccount = await this.prisma.gmailAccount.findUnique({
+          where: {
+            userId_email: { userId: user.id, email },
+          },
+        });
+        if (existingAccount && existingAccount.refreshToken) {
+          encryptedRefresh = existingAccount.refreshToken;
+        }
+      }
+
+      // If we STILL don't have a refresh token (neither from Google nor the database),
+      // we must force consent so Google returns it.
+      if (!encryptedRefresh) {
+        console.warn(`[OAUTH_WARNING] Refresh token missing and not found in database for user ${email}. Redirecting to force consent.`);
+        const oAuth2ClientForce = new google.auth.OAuth2(
+          process.env.GOOGLE_CLIENT_ID,
+          process.env.GOOGLE_CLIENT_SECRET,
+          process.env.GOOGLE_CALLBACK_URL
+        );
+        const url = oAuth2ClientForce.generateAuthUrl({
+          access_type: 'offline',
+          prompt: 'consent',
+          scope: [
+            'https://www.googleapis.com/auth/gmail.send',
+            'https://www.googleapis.com/auth/gmail.metadata',
+            'openid',
+            'https://www.googleapis.com/auth/userinfo.email',
+            'https://www.googleapis.com/auth/userinfo.profile',
+          ],
+        });
+        return res.redirect(url);
+      }
 
       // 3. Upsert Google account credentials
       await this.prisma.gmailAccount.upsert({
@@ -170,14 +206,14 @@ export class AuthController {
           userId_email: { userId: user.id, email },
         },
         update: {
-          accessToken: encryptedAccess,
+          accessToken: encryptedAccess || undefined,
           refreshToken: encryptedRefresh,
           tokenExpiry: expiryDate,
         },
         create: {
           userId: user.id,
           email,
-          accessToken: encryptedAccess,
+          accessToken: encryptedAccess || '',
           refreshToken: encryptedRefresh,
           tokenExpiry: expiryDate,
         },
