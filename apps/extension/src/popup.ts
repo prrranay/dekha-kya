@@ -1,7 +1,7 @@
 interface RecentEvent {
   subject: string;
   recipientEmail: string;
-  openedAt: string;
+  timestamp: string;
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -45,7 +45,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const item = document.createElement('div');
             item.className = 'activity-item';
 
-            const timeStr = formatRelativeTime(event.openedAt);
+            const timeStr = formatRelativeTime(event.timestamp);
 
             item.innerHTML = `
               <div class="activity-icon">

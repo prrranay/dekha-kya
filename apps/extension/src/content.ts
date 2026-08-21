@@ -616,6 +616,25 @@ function injectToolbarIcon() {
   dropdown.style.fontFamily = 'Roboto, Arial, sans-serif';
 
   dropdown.innerHTML = `
+    <style>
+      .dekh-kya-activities::-webkit-scrollbar {
+        width: 5px;
+      }
+      .dekh-kya-activities::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      .dekh-kya-activities::-webkit-scrollbar-thumb {
+        background: #3f3f46;
+        border-radius: 4px;
+      }
+      .dekh-kya-activities::-webkit-scrollbar-thumb:hover {
+        background: #52525b;
+      }
+      .dekh-kya-activities {
+        scrollbar-width: thin;
+        scrollbar-color: #3f3f46 transparent;
+      }
+    </style>
     <div style="display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #27272a;padding-bottom:12px;margin-bottom:12px;">
       <div style="display:flex;align-items:center;gap:8px;">
         <img src="${chrome.runtime.getURL('logo.png')}" style="width:20px;height:20px;border-radius:50%;" />
@@ -623,7 +642,7 @@ function injectToolbarIcon() {
       </div>
       <button class="dekh-kya-go-dashboard" style="background:#4f46e5;color:white;border:none;border-radius:4px;padding:4px 8px;font-size:11px;font-weight:600;cursor:pointer;">Dashboard</button>
     </div>
-    <div class="dekh-kya-activities" style="display:flex;flex-direction:column;gap:12px;max-height:300px;overflow-y:auto;min-height:50px;">
+    <div class="dekh-kya-activities" style="display:flex;flex-direction:column;gap:12px;max-height:280px;overflow-y:auto;min-height:50px;padding-right:4px;">
       <div style="text-align:center;color:#a1a1aa;font-size:12px;padding:12px 0;">Loading activity...</div>
     </div>
   `;
@@ -678,7 +697,8 @@ function fetchToolbarActivities(containerEl: HTMLElement) {
         item.style.paddingBottom = '8px';
         item.style.lineHeight = '1.4';
 
-        const timeStr = getActivityRelativeTime(event.openedAt);
+        // Fix field name mapping to prevent NaN
+        const timeStr = getActivityRelativeTime(event.timestamp);
 
         item.innerHTML = `
           <div style="color:#10b981;flex-shrink:0;margin-top:2px;">
