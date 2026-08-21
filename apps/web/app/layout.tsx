@@ -30,7 +30,7 @@ export default function RootLayout({
             <div>
               {/* Logo / Brand Header */}
               <div className="h-16 flex items-center px-6 border-b border-zinc-100 gap-2">
-                <img src="/logo.svg" alt="Dekha Kya? Logo" className="w-8 h-8" />
+                <img src="/logo.png" alt="Dekha Kya? Logo" className="w-8 h-8 rounded-lg" />
                 <div>
                   <h1 className="text-sm font-semibold tracking-tight text-zinc-900 leading-none">Dekha Kya?</h1>
                   <span className="text-[10px] text-zinc-500 font-medium tracking-wide uppercase">Gmail Tracker</span>
