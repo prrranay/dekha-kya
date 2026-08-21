@@ -17,6 +17,17 @@ describe('Gmail Email Tracker E2E & Integration Tests', () => {
 
   // Mock Prisma Queries
   const mockPrismaService = {
+    gmailAccount: {
+      findFirst: jest.fn().mockImplementation(() =>
+        Promise.resolve({
+          id: 'mock-account-id',
+          email: 'dev-user@gmail.com',
+          accessToken: 'enc-access-token',
+          refreshToken: 'enc-refresh-token',
+          tokenExpiry: new Date(Date.now() + 3600 * 1000),
+        })
+      ),
+    },
     user: {
       findUnique: jest.fn().mockResolvedValue({ id: 'dev-user-id', email: 'dev-user@gmail.com' }),
       create: jest.fn(),
@@ -38,6 +49,7 @@ describe('Gmail Email Tracker E2E & Integration Tests', () => {
     },
     trackedRecipient: {
       findUnique: jest.fn(),
+      findFirst: jest.fn(),
       create: jest.fn().mockImplementation((args) =>
         Promise.resolve({
           id: 'mock-recip-uuid',
@@ -254,10 +266,11 @@ describe('Gmail Email Tracker E2E & Integration Tests', () => {
 
   // 8. Invalid token
   it('8. Should return 1x1 transparent pixel even with invalid token lookup to avoid leaking status', async () => {
+    const token = '00000000000000000000000000000000';
     mockPrismaService.trackedRecipient.findUnique.mockResolvedValueOnce(null);
 
     const res = await request(app.getHttpServer())
-      .get('/tracking/open/nonexistent-token')
+      .get(`/tracking/open/${token}`)
       .expect(200);
 
     expect(res.headers['content-type']).toBe('image/gif');
@@ -265,12 +278,17 @@ describe('Gmail Email Tracker E2E & Integration Tests', () => {
 
   // 9. Repeated opens
   it('9. Should rate limit identical opens occurring within 2 seconds', async () => {
-    const token = 'rate-limited-token';
+    const token = '1234567890abcdef1234567890abcdef';
 
     mockPrismaService.trackedRecipient.findUnique.mockResolvedValue({
       id: 'recip-123',
       trackingToken: token,
       openCount: 0,
+      trackedMessage: {
+        trackedThread: {
+          userId: 'dev-user-id',
+        },
+      },
     });
 
     // Fire first open
@@ -284,12 +302,17 @@ describe('Gmail Email Tracker E2E & Integration Tests', () => {
 
   // 10. Self-open
   it('10. Should flag category as SELF_OPEN when sender=true query is provided', async () => {
-    const token = 'self-open-token';
+    const token = 'abcdefabcdefabcdefabcdefabcdef12';
 
     mockPrismaService.trackedRecipient.findUnique.mockResolvedValueOnce({
       id: 'recip-123',
       trackingToken: token,
       openCount: 0,
+      trackedMessage: {
+        trackedThread: {
+          userId: 'dev-user-id',
+        },
+      },
     });
 
     await request(app.getHttpServer())
@@ -349,8 +372,6 @@ describe('Gmail Email Tracker E2E & Integration Tests', () => {
 
   // 13. Tracking disabled
   it('13. Should skip API sending call when tracking checkbox is unselected in compose', async () => {
-    // Note: Tracking toggle client logic is evaluated by compose hooks in the extension before posting.
-    // If disabled, standard untracked Gmail send is permitted directly.
     expect(true).toBe(true);
   });
 
@@ -360,7 +381,7 @@ describe('Gmail Email Tracker E2E & Integration Tests', () => {
     mockPrismaService.trackedRecipient.findUnique.mockRejectedValueOnce(new Error('DB Timeout'));
 
     await request(app.getHttpServer())
-      .get('/tracking/open/error-token')
+      .get('/tracking/open/1234567890abcdef1234567890abcdef')
       .expect(200);
   });
 
@@ -370,14 +391,23 @@ describe('Gmail Email Tracker E2E & Integration Tests', () => {
       subject: 'Broken API Send',
       htmlBody: '<p>Test</p>',
       recipients: [{ email: 'rahul@gmail.com', recipientType: 'TO' }],
-      fromEmail: 'fail-gmail-api@gmail.com', // Triggers throw in mocked sendMime
+      fromEmail: 'fail-gmail-api@gmail.com',
     };
+
+    // Mock gmailAccount query return email to trigger simulated outage
+    mockPrismaService.gmailAccount.findFirst.mockResolvedValueOnce({
+      id: 'mock-account-id',
+      email: 'fail-gmail-api@gmail.com',
+      accessToken: 'enc-access-token',
+      refreshToken: 'enc-refresh-token',
+      tokenExpiry: new Date(Date.now() + 3600 * 1000),
+    });
 
     const res = await request(app.getHttpServer())
       .post('/gmail/send')
       .send(payload)
       .expect(500);
 
-    expect(res.body.message).toContain('simulated outage');
+    expect(res.body.message).toContain('Gmail API simulated outage');
   });
 });

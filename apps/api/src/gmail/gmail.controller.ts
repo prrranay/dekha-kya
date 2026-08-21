@@ -1,4 +1,4 @@
-import { Controller, Post, Body, InternalServerErrorException, Injectable, UseGuards, UnauthorizedException } from '@nestjs/common';
+import { Controller, Post, Body, Injectable, UseGuards, UnauthorizedException, HttpException, HttpStatus, InternalServerErrorException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { GmailService } from './gmail.service';
 import { SendMailDto } from './dto/send-mail.dto';
@@ -6,6 +6,36 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuthGuard } from '../auth/auth.guard';
 import { CurrentUser } from '../auth/current-user.decorator';
 import * as crypto from 'crypto';
+
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+function deduplicateRecipients(recipients: any[]): any[] {
+  const map = new Map<string, any>();
+  for (const r of recipients) {
+    const emailNorm = r.email.trim().toLowerCase();
+    if (!emailNorm) continue;
+
+    const existing = map.get(emailNorm);
+    if (!existing) {
+      map.set(emailNorm, { ...r, email: emailNorm });
+    } else {
+      const priority: Record<string, number> = { TO: 3, CC: 2, BCC: 1 };
+      const currentPriority = priority[r.recipientType] || 0;
+      const existingPriority = priority[existing.recipientType] || 0;
+      if (currentPriority > existingPriority) {
+        map.set(emailNorm, { ...r, email: emailNorm });
+      }
+    }
+  }
+  return Array.from(map.values());
+}
 
 @Injectable()
 export class SendOrchestrator {
@@ -23,7 +53,6 @@ export class SendOrchestrator {
       recipients,
       inReplyTo,
       references,
-      fromEmail,
     } = dto;
 
     // Ensure user exists in our session records
@@ -32,6 +61,24 @@ export class SendOrchestrator {
       throw new UnauthorizedException('Sender user profile not found in database');
     }
 
+    // Determine the sender from the authenticated user's connected GmailAccount
+    const gmailAccount = await this.prisma.gmailAccount.findFirst({
+      where: { userId },
+    });
+
+    if (!gmailAccount) {
+      throw new HttpException(
+        {
+          statusCode: HttpStatus.CONFLICT,
+          error: 'GMAIL_NOT_CONNECTED',
+          message: 'Gmail is not connected. Connect Gmail before sending tracked email.',
+        },
+        HttpStatus.CONFLICT
+      );
+    }
+
+    const authoritativeFromEmail = gmailAccount.email;
+
     let activeGmailThreadId = inputThreadId || null;
     let dbThreadId: string | null = null;
     let dbMessageId: string | null = null;
@@ -39,34 +86,48 @@ export class SendOrchestrator {
 
     let resolvedInReplyTo = inReplyTo;
     let resolvedReferences = references;
+    let activeSubject = subject;
 
     // Resolve reply headers using Gmail API if threadId is provided
     if (activeGmailThreadId) {
       try {
-        const resolved = await this.gmailService.resolveReplyHeaders(userId, fromEmail, activeGmailThreadId);
+        const resolved = await this.gmailService.resolveReplyHeaders(userId, authoritativeFromEmail, activeGmailThreadId);
         if (resolved.inReplyTo) {
           resolvedInReplyTo = resolved.inReplyTo;
         }
         if (resolved.references) {
           resolvedReferences = resolved.references;
         }
+        if (resolved.subject) {
+          activeSubject = resolved.subject;
+          // Ensure it has Re: prefix if it doesn't already
+          if (activeSubject && !/^re:/i.test(activeSubject)) {
+            activeSubject = `Re: ${activeSubject}`;
+          }
+        }
       } catch (err) {
         console.warn(`[GMAIL_THREADING] Failed resolving reply headers for thread ${activeGmailThreadId}:`, err);
       }
     }
 
+    // Deduplicate and normalize recipients
+    const activeRecipients = deduplicateRecipients(recipients);
+    if (activeRecipients.length === 0) {
+      throw new HttpException('No valid recipients provided', HttpStatus.BAD_REQUEST);
+    }
+
     const registeredRecipients: Array<{ email: string; trackingToken: string }> = [];
 
     // Send individual copies for each recipient to isolate tracking pixels
-    for (let i = 0; i < recipients.length; i++) {
-      const recipient = recipients[i]!;
+    for (let i = 0; i < activeRecipients.length; i++) {
+      const recipient = activeRecipients[i]!;
       const trackingToken = crypto.randomBytes(24).toString('hex');
 
       // Inject the tracking image into html content
       let finalHtml = htmlBody;
       if (!finalHtml.trim() && plainTextBody) {
-        // Fallback plain text conversion
-        finalHtml = `<html><body>${plainTextBody.replace(/\r?\n/g, '<br>')}</body></html>`;
+        // Fallback plain text conversion with HTML escaping
+        finalHtml = `<html><body>${escapeHtml(plainTextBody).replace(/\r?\n/g, '<br>')}</body></html>`;
       }
 
       const pixelTag = `<img src="${trackingDomain}/api/tracking/open/${trackingToken}" width="1" height="1" alt="" style="display:block;width:1px;height:1px;border:0;">`;
@@ -81,9 +142,9 @@ export class SendOrchestrator {
 
       // Assemble RFC 2822 MIME
       const mime = this.gmailService.buildMimeMessage({
-        from: fromEmail,
+        from: authoritativeFromEmail,
         to: recipient.email,
-        subject,
+        subject: activeSubject,
         messageIdHeader,
         inReplyTo: resolvedInReplyTo,
         references: resolvedReferences,
@@ -91,12 +152,12 @@ export class SendOrchestrator {
         plainTextBody,
       });
 
-      // Dispatch via Gmail (either real Google APIs or simulator fallback)
+      // Dispatch via Gmail (no simulator fallback in production)
       let sendResult;
       try {
         sendResult = await this.gmailService.sendMime(
           userId,
-          fromEmail,
+          authoritativeFromEmail,
           mime,
           activeGmailThreadId || undefined
         );
@@ -112,10 +173,15 @@ export class SendOrchestrator {
         activeGmailThreadId = sendResult.gmailThreadId;
       }
 
-      // Initialize the logical TrackedThread on the first run
+      // Initialize the logical TrackedThread on the first run (using composite user-scoped index)
       if (!dbThreadId) {
         let thread = await this.prisma.trackedThread.findUnique({
-          where: { gmailThreadId: activeGmailThreadId },
+          where: {
+            userId_gmailThreadId: {
+              userId: user.id,
+              gmailThreadId: activeGmailThreadId,
+            },
+          },
         });
 
         if (!thread) {
@@ -123,7 +189,7 @@ export class SendOrchestrator {
             data: {
               userId: user.id,
               gmailThreadId: activeGmailThreadId,
-              subject,
+              subject: activeSubject,
             },
           });
         }
@@ -139,12 +205,12 @@ export class SendOrchestrator {
             gmailThreadId: activeGmailThreadId,
             messageIdHeader: messageIdHeader,
             direction: 'OUTBOUND',
-            subject,
+            subject: activeSubject,
             sentAt: new Date(),
           },
         });
         dbMessageId = message.id;
-        console.log(`[TRACKED_MESSAGE_CREATED] ThreadID: ${activeGmailThreadId} MessageID: ${message.id} Subject: ${subject}`);
+        console.log(`[TRACKED_MESSAGE_CREATED] ThreadID: ${activeGmailThreadId} MessageID: ${message.id} Subject: ${activeSubject}`);
       }
 
       // Create TrackedRecipient logs linked to the single logical TrackedMessage
@@ -155,6 +221,7 @@ export class SendOrchestrator {
           displayName: recipient.displayName || null,
           recipientType: recipient.recipientType,
           trackingToken,
+          gmailMessageId: sendResult.gmailMessageId, // Store underlying copy ID
         },
       });
 
@@ -186,6 +253,10 @@ export class GmailController {
     description: 'Tracked email sent successfully. Returned data maps recipient specific tokens.',
   })
   @ApiResponse({
+    status: 409,
+    description: 'Gmail account is not connected.',
+  })
+  @ApiResponse({
     status: 500,
     description: 'Internal server error during Gmail send or token generation.',
   })
@@ -193,6 +264,9 @@ export class GmailController {
     try {
       return await this.orchestrator.send(dto, currentUser.id);
     } catch (error: unknown) {
+      if (error instanceof HttpException) {
+        throw error;
+      }
       const err = error as Error;
       console.error('Failed orchestrating Gmail send:', error);
       throw new InternalServerErrorException(err.message || 'Gmail transmission failed');

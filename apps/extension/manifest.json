@@ -11,8 +11,7 @@
   ],
   "host_permissions": [
     "https://mail.google.com/*",
-    "http://localhost:4000/*",
-    "https://dekha-kya.up.railway.app/*"
+    "http://localhost:4000/*"
   ],
   "action": {
     "default_popup": "popup.html",
@@ -28,7 +27,8 @@
   "content_scripts": [
     {
       "matches": [
-        "https://mail.google.com/*"
+        "https://mail.google.com/*",
+        "http://localhost:3000/*"
       ],
       "js": [
         "dist/content.js"

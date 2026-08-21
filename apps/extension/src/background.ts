@@ -1,4 +1,4 @@
-const API_BASE_URL = 'https://dekha-kya.up.railway.app/api';
+import { API_BASE_URL, FRONTEND_URL } from './config';
 
 console.log('Dekha Kya? Tracker Service Worker Active.');
 
@@ -11,6 +11,7 @@ interface ExtensionResponse {
   success: boolean;
   data?: any;
   error?: string;
+  frontendUrl?: string;
 }
 
 // Listen for message events from content scripts (running in Gmail context)
@@ -20,6 +21,11 @@ chrome.runtime.onMessage.addListener(
     _sender: chrome.runtime.MessageSender,
     sendResponse: (response: ExtensionResponse) => void
   ): boolean => {
+    if (message.type === 'GET_FRONTEND_URL') {
+      sendResponse({ success: true, frontendUrl: FRONTEND_URL });
+      return true;
+    }
+
     if (message.type === 'GET_AUTH_STATUS') {
       fetch(`${API_BASE_URL}/auth/status`, {
         method: 'GET',

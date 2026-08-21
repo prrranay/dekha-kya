@@ -19,6 +19,7 @@ interface StatsData {
   openedEmails: number;
   totalDetectedOpens: number;
   recentEvents: RecentEvent[];
+  gmailConnected?: boolean;
 }
 
 const API_BASE_URL = `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000'}/api`;
@@ -37,6 +38,18 @@ export default function DashboardPage() {
     queryFn: fetchDashboardStats,
     refetchInterval: 5000, // Poll every 5 seconds for live activity logs
   });
+
+  const [extensionActive, setExtensionActive] = React.useState(false);
+
+  React.useEffect(() => {
+    const checkExtension = () => {
+      const active = document.documentElement.hasAttribute('data-dekha-kya-extension');
+      setExtensionActive(active);
+    };
+    checkExtension();
+    const interval = setInterval(checkExtension, 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   if (isLoading) {
     return (
@@ -192,15 +205,19 @@ export default function DashboardPage() {
             <div className="space-y-3 pt-2">
               <div className="flex items-center justify-between text-xs border-b border-zinc-100 pb-2">
                 <span className="text-zinc-500">Chrome Extension</span>
-                <span className="font-semibold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full">Active</span>
+                <span className={`font-semibold px-2 py-0.5 rounded-full ${extensionActive ? 'text-emerald-600 bg-emerald-50' : 'text-amber-600 bg-amber-50'}`}>
+                  {extensionActive ? 'Active' : 'Inactive'}
+                </span>
               </div>
               <div className="flex items-center justify-between text-xs border-b border-zinc-100 pb-2">
                 <span className="text-zinc-500">Gmail API Status</span>
-                <span className="font-semibold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full">Synchronized</span>
+                <span className={`font-semibold px-2 py-0.5 rounded-full ${data.gmailConnected ? 'text-emerald-600 bg-emerald-50' : 'text-red-600 bg-red-50'}`}>
+                  {data.gmailConnected ? 'Synchronized' : 'Disconnected'}
+                </span>
               </div>
               <div className="flex items-center justify-between text-xs border-b border-zinc-100 pb-2">
                 <span className="text-zinc-500">Encryption Method</span>
-                <span className="font-semibold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full">AES-256-CBC</span>
+                <span className="font-semibold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full">AES-256-GCM</span>
               </div>
             </div>
           </div>

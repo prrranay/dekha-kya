@@ -6,6 +6,19 @@ interface RegisterMessageRecipient {
 
 console.log('Dekha Kya? Gmail tracker content script initialized.');
 
+// Detect extension on dashboard pages and set DOM indicator
+if (window.location.hostname === 'localhost' || window.location.hostname.includes('vercel.app')) {
+  document.documentElement.setAttribute('data-dekha-kya-extension', 'true');
+  console.log('Dekha Kya? Extension detected on dashboard page.');
+}
+
+let frontendUrl = 'https://dekha-kya.vercel.app'; // Fallback default
+chrome.runtime.sendMessage({ type: 'GET_FRONTEND_URL' }, (res) => {
+  if (res && res.success && res.frontendUrl) {
+    frontendUrl = res.frontendUrl;
+  }
+});
+
 // Keep track of active observers to prevent duplicates
 const processedComposeWindows = new Set<Element>();
 
@@ -71,7 +84,7 @@ function setupComposeTracking(composeBox: Element) {
   const checkbox = document.createElement('input');
   checkbox.type = 'checkbox';
   checkbox.id = `track-toggle-${Math.random().toString(36).substr(2, 9)}`;
-  checkbox.checked = true; // Checked by default if authenticated
+  checkbox.checked = false; // OFF by default
   checkbox.style.marginRight = '8px';
   checkbox.style.accentColor = '#4f46e5';
   checkbox.style.cursor = 'pointer';
@@ -108,7 +121,7 @@ function setupComposeTracking(composeBox: Element) {
       
       // Load toggle state from extension storage settings
       chrome.storage.local.get(['trackingEnabled'], (result) => {
-        checkbox.checked = result.trackingEnabled !== false;
+        checkbox.checked = result.trackingEnabled === true;
       });
 
       container.style.display = 'inline-flex';
@@ -154,7 +167,7 @@ function setupComposeTracking(composeBox: Element) {
       // Check current auth status before allowing tracked send
       chrome.runtime.sendMessage({ type: 'GET_AUTH_STATUS' }, async (res) => {
         if (res && res.success && res.data && res.data.authenticated && res.data.email) {
-          await handleTrackedSend(composeBox, res.data.email);
+          await handleTrackedSend(composeBox, res.data.email, checkbox);
         } else {
           alert('Gmail connection expired or not configured. Please click "Connect Gmail" to authorize tracking first.');
           chrome.runtime.sendMessage({ type: 'OPEN_OAUTH_TAB' });
@@ -173,7 +186,7 @@ function setupComposeTracking(composeBox: Element) {
 
         chrome.runtime.sendMessage({ type: 'GET_AUTH_STATUS' }, async (res) => {
           if (res && res.success && res.data && res.data.authenticated && res.data.email) {
-            await handleTrackedSend(composeBox, res.data.email);
+            await handleTrackedSend(composeBox, res.data.email, checkbox);
           } else {
             alert('Gmail connection expired or not configured. Please click "Connect Gmail" to authorize tracking first.');
             chrome.runtime.sendMessage({ type: 'OPEN_OAUTH_TAB' });
@@ -227,7 +240,7 @@ function getCurrentGmailAddress(): string | null {
 /**
  * Handles gathering parameters and transmitting tracked emails.
  */
-async function handleTrackedSend(composeBox: Element, senderEmail: string) {
+async function handleTrackedSend(composeBox: Element, senderEmail: string, checkbox: HTMLInputElement) {
   console.log('Initiating tracked split-send sequence...');
   console.log('[SENDER] Using authenticated sender email:', senderEmail);
 
@@ -256,11 +269,7 @@ async function handleTrackedSend(composeBox: Element, senderEmail: string) {
   const plainTextBody = bodyEditor ? bodyEditor.innerText : '';
 
   // 3. Gather thread details (Check if we are in reply mode)
-  let gmailThreadId: string | undefined = undefined;
-  const match = window.location.hash.match(/#inbox\/([a-f0-9]+)/);
-  if (match && match[1]) {
-    gmailThreadId = match[1];
-  }
+  let gmailThreadId = getThreadIdFromUrl();
 
   const cleanFromEmail = senderEmail;
 
@@ -299,7 +308,7 @@ async function handleTrackedSend(composeBox: Element, senderEmail: string) {
         // Show "Message sent." toast with link to Sent folder and dashboard monitor link
         showGmailToast('Message sent.', [
           { text: 'View message', url: '#sent' },
-          { text: 'Monitor reply', url: 'https://dekha-kya.vercel.app/emails', target: '_blank' }
+          { text: 'Monitor reply', url: `${frontendUrl}/emails`, target: '_blank' }
         ]);
 
         // Keep composeBox hidden so there is no flash while it closes programmatically
@@ -321,7 +330,25 @@ async function handleTrackedSend(composeBox: Element, senderEmail: string) {
         // Restore visibility so the user doesn't lose their draft email
         composeBoxElement.style.display = originalDisplay;
 
-        alert(`Tracking server error: ${response?.error || 'Tracking is temporarily unavailable. Your email can still be sent without tracking.'}`);
+        showFailureModal(
+          // Retry action
+          () => {
+            handleTrackedSend(composeBox, senderEmail, checkbox);
+          },
+          // Send without tracking action
+          () => {
+            checkbox.checked = false;
+            // Now click the send button again programmatically
+            const realSendBtn = composeBox.querySelector('.T-I.J-J5-Ji.aoO.v7.T-I-atl.L3') as HTMLElement;
+            if (realSendBtn) {
+              realSendBtn.click();
+            }
+          },
+          // Cancel action
+          () => {
+            // Nothing to do, visibility is already restored
+          }
+        );
       }
     }
   );
@@ -519,6 +546,119 @@ function extractEmailsFromString(text: string): string[] {
   return matches ? matches.map((m) => m.toLowerCase().trim()) : [];
 }
 
+function getThreadIdFromUrl(): string | undefined {
+  const hash = window.location.hash;
+  if (!hash) return undefined;
+  
+  // Gmail URLs look like: #inbox/18a1bf18db82049d, #sent/18a1bf18db82049d, #search/query/18a1bf18db82049d, #label/name/18a1bf18db82049d, etc.
+  const segments = hash.split('/');
+  const lastSegment = segments[segments.length - 1];
+  if (lastSegment && /^[a-f0-9]{16}$/.test(lastSegment)) {
+    return lastSegment;
+  }
+  return undefined;
+}
+
+function showFailureModal(
+  retryFn: () => void,
+  sendWithoutTrackingFn: () => void,
+  cancelFn: () => void
+) {
+  const existing = document.getElementById('dekha-kya-failure-modal');
+  if (existing) existing.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'dekha-kya-failure-modal';
+  modal.style.position = 'fixed';
+  modal.style.top = '0';
+  modal.style.left = '0';
+  modal.style.width = '100vw';
+  modal.style.height = '100vh';
+  modal.style.backgroundColor = 'rgba(0, 0, 0, 0.5)';
+  modal.style.display = 'flex';
+  modal.style.alignItems = 'center';
+  modal.style.justifyContent = 'center';
+  modal.style.zIndex = '2147483647';
+  modal.style.fontFamily = 'Roboto, Arial, sans-serif';
+
+  const box = document.createElement('div');
+  box.style.backgroundColor = '#ffffff';
+  box.style.padding = '24px';
+  box.style.borderRadius = '8px';
+  box.style.boxShadow = '0 4px 16px rgba(0, 0, 0, 0.2)';
+  box.style.width = '400px';
+  box.style.textAlign = 'left';
+
+  const title = document.createElement('h3');
+  title.innerText = 'Tracking failed.';
+  title.style.margin = '0 0 12px 0';
+  title.style.fontSize = '18px';
+  title.style.color = '#d93025';
+
+  const desc = document.createElement('p');
+  desc.innerText = 'Your draft has been preserved.';
+  desc.style.margin = '0 0 24px 0';
+  desc.style.fontSize = '14px';
+  desc.style.color = '#3c4043';
+
+  const actions = document.createElement('div');
+  actions.style.display = 'flex';
+  actions.style.justifyContent = 'flex-end';
+  actions.style.gap = '8px';
+
+  const btnCancel = document.createElement('button');
+  btnCancel.innerText = 'Cancel';
+  btnCancel.style.padding = '8px 16px';
+  btnCancel.style.borderRadius = '4px';
+  btnCancel.style.border = '1px solid #dadce0';
+  btnCancel.style.backgroundColor = '#ffffff';
+  btnCancel.style.color = '#3c4043';
+  btnCancel.style.cursor = 'pointer';
+  btnCancel.style.fontSize = '13px';
+  btnCancel.addEventListener('click', () => {
+    modal.remove();
+    cancelFn();
+  });
+
+  const btnSendWithout = document.createElement('button');
+  btnSendWithout.innerText = 'Send without tracking';
+  btnSendWithout.style.padding = '8px 16px';
+  btnSendWithout.style.borderRadius = '4px';
+  btnSendWithout.style.border = '1px solid #dadce0';
+  btnSendWithout.style.backgroundColor = '#ffffff';
+  btnSendWithout.style.color = '#1a73e8';
+  btnSendWithout.style.cursor = 'pointer';
+  btnSendWithout.style.fontSize = '13px';
+  btnSendWithout.addEventListener('click', () => {
+    modal.remove();
+    sendWithoutTrackingFn();
+  });
+
+  const btnRetry = document.createElement('button');
+  btnRetry.innerText = 'Retry';
+  btnRetry.style.padding = '8px 16px';
+  btnRetry.style.borderRadius = '4px';
+  btnRetry.style.border = 'none';
+  btnRetry.style.backgroundColor = '#1a73e8';
+  btnRetry.style.color = '#ffffff';
+  btnRetry.style.cursor = 'pointer';
+  btnRetry.style.fontSize = '13px';
+  btnRetry.style.fontWeight = 'bold';
+  btnRetry.addEventListener('click', () => {
+    modal.remove();
+    retryFn();
+  });
+
+  actions.appendChild(btnCancel);
+  actions.appendChild(btnSendWithout);
+  actions.appendChild(btnRetry);
+  box.appendChild(title);
+  box.appendChild(desc);
+  box.appendChild(actions);
+  modal.appendChild(box);
+  document.body.appendChild(modal);
+}
+
 // Start observing the page for compose window elements
 initComposeObserver();
 
@@ -661,7 +801,7 @@ function injectToolbarIcon() {
   });
 
   dropdown.querySelector('.dekh-kya-go-dashboard')?.addEventListener('click', () => {
-    window.open('https://dekha-kya.vercel.app/emails', '_blank');
+    window.open(`${frontendUrl}/emails`, '_blank');
   });
 
   // Close dropdown on clicking outside
@@ -706,7 +846,7 @@ function fetchToolbarActivities(containerEl: HTMLElement) {
           item.style.backgroundColor = 'transparent';
         });
         item.addEventListener('click', () => {
-          window.open(`https://dekha-kya.vercel.app/emails?threadId=${event.threadId}`, '_blank');
+          window.open(`${frontendUrl}/emails?threadId=${event.threadId}`, '_blank');
         });
 
         // Fix field name mapping to prevent NaN

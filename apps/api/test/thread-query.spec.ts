@@ -17,6 +17,7 @@ describe('Thread & Message-Level Query and Dashboard E2E Tests', () => {
     },
     trackedRecipient: {
       findUnique: jest.fn(),
+      findFirst: jest.fn(),
     },
     trackingEvent: {
       findMany: jest.fn(),
@@ -250,7 +251,7 @@ interface TestMessage {
       ],
     };
 
-    mockPrismaService.trackedRecipient.findUnique.mockResolvedValueOnce(mockRecipient);
+    mockPrismaService.trackedRecipient.findFirst.mockResolvedValueOnce(mockRecipient);
 
     const res = await request(app.getHttpServer())
       .get('/recipients/r-123/events')

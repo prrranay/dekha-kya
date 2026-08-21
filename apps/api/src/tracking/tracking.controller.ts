@@ -1,6 +1,7 @@
 import { Controller, Post, Body, Get, Param, Res, Req, Query, HttpStatus, UseGuards } from '@nestjs/common';
 import { Response, Request } from 'express';
 import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiQuery } from '@nestjs/swagger';
+import * as jwt from 'jsonwebtoken';
 import { TrackingService } from './tracking.service';
 import { RegisterMessageDto } from './dto/register-message.dto';
 import { AuthGuard } from '../auth/auth.guard';
@@ -33,19 +34,6 @@ export class TrackingController {
     @Req() req: Request,
     @Res() res: Response
   ) {
-    const userAgent = req.headers['user-agent'];
-    const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress;
-    const referer = req.headers['referer'];
-    const isSelf = senderQuery === 'true';
-
-    // Track in background without blocking the pixel transmission
-    this.trackingService
-      .recordOpen(token, { userAgent, ip, referer, isSelf })
-      .catch((err) => {
-        // Log errors to avoid failing the response to user's client
-        console.error(`Failed to record open for token ${token}:`, err.message);
-      });
-
     // 1x1 Transparent GIF base64 encoding
     const pixel = Buffer.from(
       'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7',
@@ -57,6 +45,37 @@ export class TrackingController {
     res.setHeader('Cache-Control', 'private, no-store, no-cache, must-revalidate, max-age=0');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
+
+    // 1. Validate token format (must be 32-64 hex chars)
+    if (!token || !/^[0-9a-fA-F]{32,64}$/.test(token)) {
+      return res.status(HttpStatus.OK).send(pixel);
+    }
+
+    const userAgent = req.headers['user-agent'];
+    const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress;
+    const referer = req.headers['referer'];
+    const isSelf = senderQuery === 'true';
+
+    // 2. Extract sessionUserId from cookie to evaluate SELF_OPEN heuristic
+    let sessionUserId: string | undefined = undefined;
+    const sessionToken = req.cookies?.session || req.cookies?.jwt;
+    if (sessionToken) {
+      try {
+        const secret = process.env.SESSION_SECRET || 'dev-session-secret-key-123456789';
+        const decoded = jwt.verify(sessionToken, secret) as { userId: string };
+        sessionUserId = decoded.userId;
+      } catch (e) {
+        // Ignore invalid session token in tracking pixel request
+      }
+    }
+
+    // 3. Await database operation to ensure pixel tracking reliability.
+    // Suppress exceptions to avoid leaking token status or breaking image rendering.
+    try {
+      await this.trackingService.recordOpen(token, { userAgent, ip, referer, isSelf, sessionUserId });
+    } catch (err) {
+      console.error(`Failed/Invalid open for token ${token}:`, (err as Error).message);
+    }
 
     return res.status(HttpStatus.OK).send(pixel);
   }

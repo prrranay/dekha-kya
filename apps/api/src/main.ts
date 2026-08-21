@@ -1,10 +1,50 @@
+import 'dotenv/config';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { ValidationPipe } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import cookieParser from 'cookie-parser';
 
+function validateConfig() {
+  const required = [
+    'DATABASE_URL',
+    'PORT',
+    'GOOGLE_CLIENT_ID',
+    'GOOGLE_CLIENT_SECRET',
+    'GOOGLE_CALLBACK_URL',
+    'GOOGLE_TOKEN_ENCRYPTION_KEY',
+    'SESSION_SECRET',
+    'API_PUBLIC_URL',
+    'FRONTEND_URL',
+    'CORS_ORIGIN'
+  ];
+
+  const missing = required.filter(key => !process.env[key]);
+  if (missing.length > 0) {
+    throw new Error(`Configuration Error: Missing required environment variables: ${missing.join(', ')}`);
+  }
+
+  // Validate GOOGLE_TOKEN_ENCRYPTION_KEY must be a valid 32-byte hex string (64 characters)
+  const encryptionKey = process.env.GOOGLE_TOKEN_ENCRYPTION_KEY;
+  if (!/^[0-9a-fA-F]{64}$/.test(encryptionKey!)) {
+    throw new Error(`Configuration Error: GOOGLE_TOKEN_ENCRYPTION_KEY must be a 64-character hex string representing 32 bytes.`);
+  }
+
+  // Validate SESSION_SECRET must not be short/insecure or using the default placeholder
+  const sessionSecret = process.env.SESSION_SECRET;
+  const insecureSecrets = [
+    'dev-session-secret-key-123',
+    'dev-session-secret-key-123456789',
+    'your-super-secret-jwt-session-key',
+    'change-me-in-production-1234567890'
+  ];
+  if (insecureSecrets.includes(sessionSecret!) || sessionSecret!.length < 16) {
+    throw new Error(`Configuration Error: SESSION_SECRET is missing, insecure, or using a known default key.`);
+  }
+}
+
 async function bootstrap() {
+  validateConfig();
   const app = await NestFactory.create(AppModule);
 
   // Enable CORS for our next.js frontend and extension to send credentials/cookies

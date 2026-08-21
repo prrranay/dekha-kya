@@ -38,10 +38,11 @@ export class ThreadController {
   @ApiParam({ name: 'id', description: 'Internal database ID of the TrackedRecipient' })
   @ApiResponse({ status: 200, description: 'Recipient event log timeline returned.' })
   @ApiResponse({ status: 404, description: 'Recipient not found.' })
-  async getRecipientEvents(@Param('id') id: string) {
-    // Note: Since this route is authenticated, any authenticated user can view it.
-    // If you need strict resource-ownership checking, you can verify that the recipient belongs to a thread created by the current user.
-    return this.threadService.getRecipientEvents(id);
+  async getRecipientEvents(
+    @Param('id') id: string,
+    @CurrentUser() currentUser: { id: string }
+  ) {
+    return this.threadService.getRecipientEvents(id, currentUser.id);
   }
 
   @Get('dashboard/stats')

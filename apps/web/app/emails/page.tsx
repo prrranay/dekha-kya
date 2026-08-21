@@ -72,6 +72,7 @@ interface RecipientDetails {
   recipientId: string;
   email: string;
   displayName: string | null;
+  openCount?: number;
   events: RecipientEvent[];
 }
 
@@ -557,7 +558,7 @@ export default function TrackedEmailsPage() {
                   <div className="flex justify-between text-xs">
                     <span className="text-zinc-500">Total detected opens</span>
                     <span className="font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-100">
-                      {recipientDetails?.events.length || 0} opens
+                      {recipientDetails?.openCount || 0} opens
                     </span>
                   </div>
                 </div>

@@ -10,8 +10,10 @@ export class GmailService {
   private readonly encryptionKey: string;
 
   constructor(private readonly prisma: PrismaService) {
-    // Read the 32-byte encryption key from GOOGLE_TOKEN_ENCRYPTION_KEY environment variable
-    const key = process.env.GOOGLE_TOKEN_ENCRYPTION_KEY || process.env.ENCRYPTION_KEY || '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+    const key = process.env.GOOGLE_TOKEN_ENCRYPTION_KEY;
+    if (!key) {
+      throw new Error('GOOGLE_TOKEN_ENCRYPTION_KEY is required but not configured.');
+    }
     this.encryptionKey = key;
   }
 
@@ -59,7 +61,6 @@ export class GmailService {
     });
 
     if (!account) {
-      // Return null to signify that we should run in Mock mode (for local tests/without live credentials)
       return null;
     }
 
@@ -96,9 +97,17 @@ export class GmailService {
     return google.gmail({ version: 'v1', auth: oAuth2Client });
   }
 
+  private sanitizeHeader(value: string | undefined): string | undefined {
+    if (!value) return undefined;
+    if (value.includes('\r') || value.includes('\n')) {
+      throw new Error('Header injection detected: CR/LF characters are not allowed in headers.');
+    }
+    return value;
+  }
+
   /**
    * Constructs a standard raw email MIME body complying with RFC 2822 formatting.
-   * Handles both html and plain text fallback injection.
+   * Handles both html and plain text fallback injection with sanitization.
    */
   buildMimeMessage(params: {
     from: string;
@@ -113,24 +122,34 @@ export class GmailService {
     plainTextBody?: string;
   }): string {
     const { from, to, cc, bcc, subject, messageIdHeader, inReplyTo, references, htmlBody, plainTextBody } = params;
+
+    const cleanFrom = this.sanitizeHeader(from)!;
+    const cleanTo = this.sanitizeHeader(to)!;
+    const cleanCc = this.sanitizeHeader(cc);
+    const cleanBcc = this.sanitizeHeader(bcc);
+    const cleanSubject = this.sanitizeHeader(subject)!;
+    const cleanMessageIdHeader = this.sanitizeHeader(messageIdHeader)!;
+    const cleanInReplyTo = this.sanitizeHeader(inReplyTo);
+    const cleanReferences = this.sanitizeHeader(references);
+
     const boundary = `----=_Part_${crypto.randomBytes(8).toString('hex')}`;
 
     const headers: string[] = [
-      `From: ${from}`,
-      `To: ${to}`,
+      `From: ${cleanFrom}`,
+      `To: ${cleanTo}`,
     ];
 
-    if (cc) headers.push(`Cc: ${cc}`);
-    if (bcc) headers.push(`Bcc: ${bcc}`);
+    if (cleanCc) headers.push(`Cc: ${cleanCc}`);
+    if (cleanBcc) headers.push(`Bcc: ${cleanBcc}`);
 
-    headers.push(`Subject: ${subject}`);
-    headers.push(`Message-ID: ${messageIdHeader}`);
+    headers.push(`Subject: ${cleanSubject}`);
+    headers.push(`Message-ID: ${cleanMessageIdHeader}`);
 
-    if (inReplyTo) {
-      headers.push(`In-Reply-To: ${inReplyTo}`);
+    if (cleanInReplyTo) {
+      headers.push(`In-Reply-To: ${cleanInReplyTo}`);
     }
-    if (references) {
-      headers.push(`References: ${references}`);
+    if (cleanReferences) {
+      headers.push(`References: ${cleanReferences}`);
     }
 
     headers.push('MIME-Version: 1.0');
@@ -169,7 +188,8 @@ export class GmailService {
   }
 
   /**
-   * Dispatches a raw MIME message copy to Google Gmail API or falls back to simulated mocks.
+   * Dispatches a raw MIME message copy to Google Gmail API.
+   * NEVER silently falls back to a simulator.
    */
   async sendMime(
     userId: string,
@@ -180,16 +200,7 @@ export class GmailService {
     const gmail = await this.getGmailClient(userId, accountEmail);
 
     if (!gmail) {
-      // Mock flow when OAuth is not linked locally
-      console.log('--- GMAIL API SIMULATOR ---');
-      console.log('Sending raw MIME:\n', mimeString);
-      console.log('Gmail Thread ID:', gmailThreadId);
-      console.log('---------------------------');
-
-      return {
-        gmailMessageId: 'mock-msg-' + crypto.randomBytes(8).toString('hex'),
-        gmailThreadId: gmailThreadId || 'mock-thread-' + crypto.randomBytes(8).toString('hex'),
-      };
+      throw new Error('Gmail is not connected. Connect Gmail before sending tracked email.');
     }
 
     const base64EncodedMime = Buffer.from(mimeString)
@@ -230,22 +241,39 @@ export class GmailService {
   }
 
   /**
-   * Resolves the proper In-Reply-To and References headers for replying to an existing thread.
+   * Selects the actual newest message in a thread by sorting based on internalDate.
+   */
+  getLatestThreadMessage(thread: any) {
+    if (!thread || !thread.messages || thread.messages.length === 0) {
+      return null;
+    }
+    const sorted = [...thread.messages].sort((a, b) => {
+      const timeA = parseInt(a.internalDate || '0', 10);
+      const timeB = parseInt(b.internalDate || '0', 10);
+      return timeB - timeA; // Descending (newest first)
+    });
+    return sorted[0] || null;
+  }
+
+  /**
+   * Resolves the proper In-Reply-To, References, and Subject headers for replying to an existing thread.
    */
   async resolveReplyHeaders(userId: string, accountEmail: string, gmailThreadId: string) {
     const thread = await this.getThreadMetadata(userId, accountEmail, gmailThreadId);
-    if (!thread || !thread.messages || thread.messages.length === 0) {
-      return { inReplyTo: undefined, references: undefined };
+    if (!thread) {
+      return { inReplyTo: undefined, references: undefined, subject: undefined };
     }
 
-    // Get the last message in the thread
-    const lastMsg = thread.messages[thread.messages.length - 1]!;
+    const lastMsg = this.getLatestThreadMessage(thread);
+    if (!lastMsg) {
+      return { inReplyTo: undefined, references: undefined, subject: undefined };
+    }
     
     // Find Message-ID and References headers
     let lastMessageId: string | undefined;
     let lastReferences: string | undefined;
 
-    lastMsg.payload?.headers?.forEach((header) => {
+    lastMsg.payload?.headers?.forEach((header: any) => {
       if (header.name?.toLowerCase() === 'message-id') {
         lastMessageId = header.value ?? undefined;
       }
@@ -254,8 +282,16 @@ export class GmailService {
       }
     });
 
+    // Also get the Subject from the first message of the thread to preserve it
+    let threadSubject: string | undefined;
+    thread?.messages?.[0]?.payload?.headers?.forEach((header: any) => {
+      if (header.name?.toLowerCase() === 'subject') {
+        threadSubject = header.value ?? undefined;
+      }
+    });
+
     if (!lastMessageId) {
-      return { inReplyTo: undefined, references: undefined };
+      return { inReplyTo: undefined, references: undefined, subject: threadSubject };
     }
 
     // New In-Reply-To is the Message-ID of the last message
@@ -266,6 +302,6 @@ export class GmailService {
       ? `${lastReferences} ${lastMessageId}`
       : lastMessageId;
 
-    return { inReplyTo, references };
+    return { inReplyTo, references, subject: threadSubject };
   }
 }

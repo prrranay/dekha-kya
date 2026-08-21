@@ -25,7 +25,12 @@ export class TrackingService {
     }
 
     let thread = await this.prisma.trackedThread.findUnique({
-      where: { gmailThreadId },
+      where: {
+        userId_gmailThreadId: {
+          userId: user.id,
+          gmailThreadId,
+        },
+      },
     });
 
     if (!thread) {
@@ -87,20 +92,27 @@ export class TrackingService {
    */
   async recordOpen(
     token: string,
-    metadata: { userAgent?: string; ip?: string; referer?: string; isSelf?: boolean }
+    metadata: { userAgent?: string; ip?: string; referer?: string; isSelf?: boolean; sessionUserId?: string }
   ): Promise<void> {
-    const nowTime = Date.now();
-    const lastOpenTime = this.openRateLimitCache.get(token);
-
-    if (lastOpenTime && nowTime - lastOpenTime < 2000) {
-      // Ignored due to rate limit threshold
+    if (this.openRateLimitCache.has(token)) {
+      // Ignored due to rate limit threshold (2-second window)
       return;
     }
-    this.openRateLimitCache.set(token, nowTime);
+    this.openRateLimitCache.set(token, Date.now());
+    setTimeout(() => {
+      this.openRateLimitCache.delete(token);
+    }, 2000);
 
-    // 1. Locate recipient
+    // 1. Locate recipient and load the thread owner's ID
     const recipient = await this.prisma.trackedRecipient.findUnique({
       where: { trackingToken: token },
+      include: {
+        trackedMessage: {
+          include: {
+            trackedThread: true,
+          },
+        },
+      },
     });
 
     if (!recipient) {
@@ -109,10 +121,15 @@ export class TrackingService {
     }
 
     // 2. Determine open category (RECIPIENT_OPEN, SELF_OPEN, UNKNOWN_OPEN)
+    // Classify as SELF_OPEN if the session user matches the thread owner or isSelf query is true.
+    // Classify as UNKNOWN_OPEN if requested via Google Image Proxy or without User-Agent.
     let category: OpenCategory = 'RECIPIENT_OPEN';
-    if (metadata.isSelf) {
+    const isGoogleProxy = metadata.userAgent && metadata.userAgent.includes('GoogleImageProxy');
+    const belongsToSender = metadata.sessionUserId && recipient.trackedMessage.trackedThread.userId === metadata.sessionUserId;
+
+    if (belongsToSender || metadata.isSelf) {
       category = 'SELF_OPEN';
-    } else if (!metadata.userAgent) {
+    } else if (isGoogleProxy || !metadata.userAgent) {
       category = 'UNKNOWN_OPEN';
     }
 
@@ -145,7 +162,7 @@ export class TrackingService {
         where: { id: recipient.id },
         data: {
           openCount: { increment: 1 },
-          firstOpenedAt: recipient.firstOpenedAt || now,
+          firstOpenedAt: recipient.firstOpenedAt ? undefined : now,
           lastOpenedAt: now,
         },
       });

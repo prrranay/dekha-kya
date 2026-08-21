@@ -4,6 +4,7 @@ import { UserDto } from '@gmail-tracker/shared';
 import { Response, Request } from 'express';
 import { google } from 'googleapis';
 import * as jwt from 'jsonwebtoken';
+import * as crypto from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { GmailService } from '../gmail/gmail.service';
 import { AuthGuard } from './auth.guard';
@@ -101,10 +102,23 @@ export class AuthController {
       'https://www.googleapis.com/auth/userinfo.profile',
     ];
 
+    // Generate cryptographically secure random state
+    const state = crypto.randomBytes(32).toString('hex');
+    const isProd = process.env.NODE_ENV === 'production';
+    
+    // Store state temporarily in a secure HTTP-only cookie with short 10-minute expiry
+    res.cookie('oauth_state', state, {
+      httpOnly: true,
+      secure: isProd,
+      sameSite: 'lax',
+      maxAge: 10 * 60 * 1000, // 10 minutes
+    });
+
     const url = oAuth2Client.generateAuthUrl({
       access_type: 'offline', // Demands refresh token
       prompt: 'consent', // Enforces consent to ensure refresh token is returned
       scope: scopes,
+      state: state,
     });
 
     return res.redirect(url);
@@ -112,8 +126,27 @@ export class AuthController {
 
   @Get('google/callback')
   @ApiOperation({ summary: 'Exchange authentication code for user session and credentials' })
-  async handleGoogleCallback(@Query('code') code: string, @Res() res: Response) {
+  async handleGoogleCallback(
+    @Query('code') code: string,
+    @Query('state') state: string,
+    @Req() req: Request,
+    @Res() res: Response
+  ) {
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    const savedState = req.cookies?.oauth_state;
+    const isProd = process.env.NODE_ENV === 'production';
+
+    // Clear state cookie immediately
+    res.clearCookie('oauth_state', {
+      httpOnly: true,
+      secure: isProd,
+      sameSite: 'lax',
+    });
+
+    if (!state || !savedState || state !== savedState) {
+      console.error('[OAUTH_FAILURE] Google OAuth state validation failed');
+      return res.redirect(`${frontendUrl}/settings?connected=false`);
+    }
 
     if (!code) {
       console.error('[OAUTH_FAILURE] Code parameter missing from Google redirect callback');
@@ -224,11 +257,10 @@ export class AuthController {
       const sessionToken = jwt.sign({ userId: user.id }, secret, { expiresIn: '7d' });
 
       // 5. Save in httpOnly cookie
-      const isProd = process.env.NODE_ENV === 'production' || (process.env.FRONTEND_URL && process.env.FRONTEND_URL.includes('vercel.app'));
       res.cookie('session', sessionToken, {
         httpOnly: true,
-        secure: !!isProd,
-        sameSite: isProd ? 'none' : 'lax',
+        secure: isProd,
+        sameSite: 'lax',
         maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
       });
 
@@ -246,13 +278,13 @@ export class AuthController {
   @ApiOperation({ summary: 'Clear the session cookie and log out the user' })
   async logout(@Res() res: Response) {
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-    const isProd = process.env.NODE_ENV === 'production' || (process.env.FRONTEND_URL && process.env.FRONTEND_URL.includes('vercel.app'));
+    const isProd = process.env.NODE_ENV === 'production';
 
     // Clear the session cookie
     res.clearCookie('session', {
       httpOnly: true,
-      secure: !!isProd,
-      sameSite: isProd ? 'none' : 'lax',
+      secure: isProd,
+      sameSite: 'lax',
     });
 
     console.log('[AUTH] User logged out, session cookie cleared.');

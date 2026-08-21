@@ -4,7 +4,7 @@
   "private": true,
   "description": "Chrome Extension for Gmail Tracker",
   "scripts": {
-    "build": "tsc",
+    "build": "node build.js",
     "clean": "rm -rf dist"
   },
   "devDependencies": {

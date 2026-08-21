@@ -183,9 +183,16 @@ export class ThreadService {
   /**
    * Retrieves the event history logs for a specific recipient, hiding raw IP configurations.
    */
-  async getRecipientEvents(recipientId: string) {
-    const recipient = await this.prisma.trackedRecipient.findUnique({
-      where: { id: recipientId },
+  async getRecipientEvents(recipientId: string, userId: string) {
+    const recipient = await this.prisma.trackedRecipient.findFirst({
+      where: {
+        id: recipientId,
+        trackedMessage: {
+          trackedThread: {
+            userId,
+          },
+        },
+      },
       include: {
         events: {
           orderBy: { timestamp: 'desc' },
@@ -211,6 +218,7 @@ export class ThreadService {
       recipientId: recipient.id,
       email: recipient.email,
       displayName: recipient.displayName,
+      openCount: recipient.openCount,
       events,
     };
   }
@@ -251,6 +259,7 @@ export class ThreadService {
     // Fetch the 5 most recent tracking events across all user emails
     const recentEvents = await this.prisma.trackingEvent.findMany({
       where: {
+        category: { not: 'SELF_OPEN' },
         trackedRecipient: {
           trackedMessage: {
             trackedThread: {
@@ -282,11 +291,16 @@ export class ThreadService {
       category: evt.category,
     }));
 
+    const gmailAccount = await this.prisma.gmailAccount.findFirst({
+      where: { userId },
+    });
+
     return {
       totalTracked,
       openedEmails: openedThreadsCount,
       totalDetectedOpens: totalOpens,
       recentEvents: mappedRecent,
+      gmailConnected: !!gmailAccount,
     };
   }
 }
