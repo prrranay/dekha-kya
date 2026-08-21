@@ -291,14 +291,15 @@ async function handleTrackedSend(composeBox: Element, senderEmail: string) {
         // Suppress the native "Draft discarded" toast that is triggered by programmatic click
         suppressGmailDiscardToast();
 
-        // Show "Message sent." toast with link to Sent folder
-        showGmailToast('Message sent.', 'View message', '#sent');
+        // Show "Message sent." toast with link to Sent folder and dashboard monitor link
+        showGmailToast('Message sent.', [
+          { text: 'View message', url: '#sent' },
+          { text: 'Monitor reply', url: 'https://dekha-kya.vercel.app/emails', target: '_blank' }
+        ]);
 
-        // Restore display property temporarily so Gmail's discard/close events can fire correctly
-        composeBoxElement.style.display = originalDisplay;
-
-        // Close the Gmail compose window programmatically to sync draft
-        const closeBtn = composeBox.querySelector('.Ha') || composeBox.querySelector('.og.T-I-atl.L3') || composeBox.querySelector('.og.T-I-J3');
+        // Keep composeBox hidden so there is no flash while it closes programmatically
+        // Close the Gmail compose window programmatically to sync/discard draft
+        const closeBtn = composeBox.querySelector('.Ha') || composeBox.querySelector('.og.T-I-atl.L3') || composeBox.querySelector('.og.T-I-J3') || composeBox.querySelector('[data-tooltip*="Discard"]') || composeBox.querySelector('[aria-label*="Discard"]');
         if (closeBtn instanceof HTMLElement) {
           closeBtn.click();
         } else {
@@ -324,7 +325,7 @@ async function handleTrackedSend(composeBox: Element, senderEmail: string) {
 /**
  * Shows a Gmail-style toast notification in the bottom-left corner.
  */
-function showGmailToast(message: string, actionText?: string, actionLink?: string) {
+function showGmailToast(message: string, links?: Array<{ text: string; url: string; target?: string }>) {
   const existing = document.querySelector('.custom-gmail-toast');
   if (existing) {
     existing.remove();
@@ -342,7 +343,7 @@ function showGmailToast(message: string, actionText?: string, actionLink?: strin
   toast.style.boxShadow = '0 3px 5px -1px rgba(0,0,0,0.2), 0 6px 10px 0 rgba(0,0,0,0.14), 0 1px 18px 0 rgba(0,0,0,0.12)';
   toast.style.display = 'flex';
   toast.style.alignItems = 'center';
-  toast.style.gap = '24px';
+  toast.style.gap = '20px';
   toast.style.fontFamily = 'Roboto, Arial, sans-serif';
   toast.style.fontSize = '14px';
   toast.style.zIndex = '2147483647';
@@ -353,19 +354,26 @@ function showGmailToast(message: string, actionText?: string, actionLink?: strin
   textSpan.innerText = message;
   toast.appendChild(textSpan);
 
-  if (actionText && actionLink) {
-    const actionBtn = document.createElement('a');
-    actionBtn.innerText = actionText;
-    actionBtn.href = actionLink;
-    actionBtn.style.color = '#8ab4f8';
-    actionBtn.style.textDecoration = 'none';
-    actionBtn.style.fontWeight = 'bold';
-    actionBtn.style.cursor = 'pointer';
-    actionBtn.style.fontSize = '14px';
-    actionBtn.addEventListener('click', () => {
-      toast.remove();
+  if (links) {
+    links.forEach((link) => {
+      const actionLink = document.createElement('a');
+      actionLink.innerText = link.text;
+      actionLink.href = link.url;
+      if (link.target) {
+        actionLink.target = link.target;
+      }
+      actionLink.style.color = '#8ab4f8';
+      actionLink.style.textDecoration = 'none';
+      actionLink.style.fontWeight = 'bold';
+      actionLink.style.cursor = 'pointer';
+      actionLink.style.fontSize = '14px';
+      actionLink.addEventListener('click', () => {
+        if (!link.target) {
+          toast.remove();
+        }
+      });
+      toast.appendChild(actionLink);
     });
-    toast.appendChild(actionBtn);
   }
 
   const closeBtn = document.createElement('span');
