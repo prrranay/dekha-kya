@@ -275,6 +275,9 @@ async function handleTrackedSend(composeBox: Element, senderEmail: string) {
   const originalDisplay = composeBoxElement.style.display;
   composeBoxElement.style.display = 'none';
 
+  // Show "Sending message..." toast immediately
+  showGmailToast('Sending message...');
+
   // Send message to background service worker to post to api
   chrome.runtime.sendMessage(
     {
@@ -285,6 +288,12 @@ async function handleTrackedSend(composeBox: Element, senderEmail: string) {
       if (response && response.success) {
         console.log('Tracked email successfully dispatched!');
         
+        // Suppress the native "Draft discarded" toast that is triggered by programmatic click
+        suppressGmailDiscardToast();
+
+        // Show "Message sent." toast with link to Sent folder
+        showGmailToast('Message sent.', 'View message', '#sent');
+
         // Restore display property temporarily so Gmail's discard/close events can fire correctly
         composeBoxElement.style.display = originalDisplay;
 
@@ -299,6 +308,10 @@ async function handleTrackedSend(composeBox: Element, senderEmail: string) {
       } else {
         console.error('Failed sending tracked email:', response?.error);
         
+        // Remove the "Sending..." toast
+        const existing = document.querySelector('.custom-gmail-toast');
+        if (existing) existing.remove();
+
         // Restore visibility so the user doesn't lose their draft email
         composeBoxElement.style.display = originalDisplay;
 
@@ -306,6 +319,101 @@ async function handleTrackedSend(composeBox: Element, senderEmail: string) {
       }
     }
   );
+}
+
+/**
+ * Shows a Gmail-style toast notification in the bottom-left corner.
+ */
+function showGmailToast(message: string, actionText?: string, actionLink?: string) {
+  const existing = document.querySelector('.custom-gmail-toast');
+  if (existing) {
+    existing.remove();
+  }
+
+  const toast = document.createElement('div');
+  toast.className = 'custom-gmail-toast';
+  toast.style.position = 'fixed';
+  toast.style.bottom = '24px';
+  toast.style.left = '24px';
+  toast.style.backgroundColor = '#202124';
+  toast.style.color = '#f1f3f4';
+  toast.style.padding = '12px 24px';
+  toast.style.borderRadius = '4px';
+  toast.style.boxShadow = '0 3px 5px -1px rgba(0,0,0,0.2), 0 6px 10px 0 rgba(0,0,0,0.14), 0 1px 18px 0 rgba(0,0,0,0.12)';
+  toast.style.display = 'flex';
+  toast.style.alignItems = 'center';
+  toast.style.gap = '24px';
+  toast.style.fontFamily = 'Roboto, Arial, sans-serif';
+  toast.style.fontSize = '14px';
+  toast.style.zIndex = '2147483647';
+  toast.style.transition = 'opacity 0.15s ease-in-out';
+  toast.style.opacity = '1';
+
+  const textSpan = document.createElement('span');
+  textSpan.innerText = message;
+  toast.appendChild(textSpan);
+
+  if (actionText && actionLink) {
+    const actionBtn = document.createElement('a');
+    actionBtn.innerText = actionText;
+    actionBtn.href = actionLink;
+    actionBtn.style.color = '#8ab4f8';
+    actionBtn.style.textDecoration = 'none';
+    actionBtn.style.fontWeight = 'bold';
+    actionBtn.style.cursor = 'pointer';
+    actionBtn.style.fontSize = '14px';
+    actionBtn.addEventListener('click', () => {
+      toast.remove();
+    });
+    toast.appendChild(actionBtn);
+  }
+
+  const closeBtn = document.createElement('span');
+  closeBtn.innerHTML = '&#x2715;';
+  closeBtn.style.cursor = 'pointer';
+  closeBtn.style.color = '#9aa0a6';
+  closeBtn.style.fontSize = '12px';
+  closeBtn.style.fontWeight = 'bold';
+  closeBtn.addEventListener('click', () => {
+    toast.remove();
+  });
+  toast.appendChild(closeBtn);
+
+  document.body.appendChild(toast);
+
+  // Auto-remove after 6 seconds unless it's the "Sending..." status toast
+  if (message !== 'Sending message...') {
+    setTimeout(() => {
+      if (toast.parentNode) {
+        toast.style.opacity = '0';
+        setTimeout(() => toast.remove(), 150);
+      }
+    }, 6000);
+  }
+}
+
+/**
+ * Temporarily intercepts and suppresses Gmail's native "Draft discarded" toast.
+ */
+function suppressGmailDiscardToast() {
+  const observer = new MutationObserver((mutations) => {
+    for (const mutation of mutations) {
+      mutation.addedNodes.forEach((node) => {
+        if (node instanceof HTMLElement) {
+          const text = node.textContent || '';
+          if (text.includes('Draft discarded') || text.includes('discarded') || text.includes('Undo')) {
+            node.style.display = 'none';
+          }
+        }
+      });
+    }
+  });
+
+  observer.observe(document.body, { childList: true, subtree: true });
+
+  setTimeout(() => {
+    observer.disconnect();
+  }, 4000);
 }
 
 /**
