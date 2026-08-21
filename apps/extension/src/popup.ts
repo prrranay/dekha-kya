@@ -2,6 +2,7 @@ interface RecentEvent {
   subject: string;
   recipientEmail: string;
   timestamp: string;
+  threadId: string;
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -44,6 +45,20 @@ document.addEventListener('DOMContentLoaded', () => {
           events.forEach((event) => {
             const item = document.createElement('div');
             item.className = 'activity-item';
+            item.style.cursor = 'pointer';
+            item.style.padding = '4px 8px';
+            item.style.borderRadius = '4px';
+            item.style.transition = 'background-color 0.15s';
+            
+            item.addEventListener('mouseover', () => {
+              item.style.backgroundColor = 'var(--bg-secondary)';
+            });
+            item.addEventListener('mouseout', () => {
+              item.style.backgroundColor = 'transparent';
+            });
+            item.addEventListener('click', () => {
+              chrome.tabs.create({ url: `https://dekha-kya.vercel.app/emails?threadId=${event.threadId}` });
+            });
 
             const timeStr = formatRelativeTime(event.timestamp);
 

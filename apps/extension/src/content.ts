@@ -694,8 +694,20 @@ function fetchToolbarActivities(containerEl: HTMLElement) {
         item.style.gap = '10px';
         item.style.fontSize = '12px';
         item.style.borderBottom = '1px solid #27272a';
-        item.style.paddingBottom = '8px';
+        item.style.padding = '8px 8px';
         item.style.lineHeight = '1.4';
+        item.style.cursor = 'pointer';
+        item.style.transition = 'background-color 0.15s';
+        
+        item.addEventListener('mouseover', () => {
+          item.style.backgroundColor = '#27272a';
+        });
+        item.addEventListener('mouseout', () => {
+          item.style.backgroundColor = 'transparent';
+        });
+        item.addEventListener('click', () => {
+          window.open(`https://dekha-kya.vercel.app/emails?threadId=${event.threadId}`, '_blank');
+        });
 
         // Fix field name mapping to prevent NaN
         const timeStr = getActivityRelativeTime(event.timestamp);

@@ -277,6 +277,7 @@ export class ThreadService {
       recipientEmail: evt.trackedRecipient.email,
       recipientName: evt.trackedRecipient.displayName || evt.trackedRecipient.email,
       subject: evt.trackedRecipient.trackedMessage.subject,
+      threadId: evt.trackedRecipient.trackedMessage.trackedThreadId,
       timestamp: evt.timestamp,
       category: evt.category,
     }));

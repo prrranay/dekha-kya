@@ -121,6 +121,16 @@ const API_BASE_URL = `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:400
 export default function TrackedEmailsPage() {
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [selectedRecipientId, setSelectedRecipientId] = useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const urlParams = new URLSearchParams(window.location.search);
+      const tid = urlParams.get('threadId');
+      if (tid) {
+        setSelectedThreadId(tid);
+      }
+    }
+  }, []);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'opened' | 'not-detected'>('all');
   const [startDate, setStartDate] = useState('');
