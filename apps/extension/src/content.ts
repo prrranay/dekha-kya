@@ -270,6 +270,11 @@ async function handleTrackedSend(composeBox: Element, senderEmail: string) {
 
   console.log('Dispatching send request to service worker payload:', sendPayload);
 
+  // Instantly hide the compose window visually so the user feels an immediate response (0ms lag)
+  const composeBoxElement = composeBox as HTMLElement;
+  const originalDisplay = composeBoxElement.style.display;
+  composeBoxElement.style.display = 'none';
+
   // Send message to background service worker to post to api
   chrome.runtime.sendMessage(
     {
@@ -279,8 +284,12 @@ async function handleTrackedSend(composeBox: Element, senderEmail: string) {
     (response: { success: boolean; error?: string } | undefined) => {
       if (response && response.success) {
         console.log('Tracked email successfully dispatched!');
-        // Close the Gmail compose window programmatically
-        const closeBtn = composeBox.querySelector('.Ha') || composeBox.querySelector('.og.T-I-J3');
+        
+        // Restore display property temporarily so Gmail's discard/close events can fire correctly
+        composeBoxElement.style.display = originalDisplay;
+
+        // Close the Gmail compose window programmatically to sync draft
+        const closeBtn = composeBox.querySelector('.Ha') || composeBox.querySelector('.og.T-I-atl.L3') || composeBox.querySelector('.og.T-I-J3');
         if (closeBtn instanceof HTMLElement) {
           closeBtn.click();
         } else {
@@ -289,6 +298,10 @@ async function handleTrackedSend(composeBox: Element, senderEmail: string) {
         }
       } else {
         console.error('Failed sending tracked email:', response?.error);
+        
+        // Restore visibility so the user doesn't lose their draft email
+        composeBoxElement.style.display = originalDisplay;
+
         alert(`Tracking server error: ${response?.error || 'Tracking is temporarily unavailable. Your email can still be sent without tracking.'}`);
       }
     }
