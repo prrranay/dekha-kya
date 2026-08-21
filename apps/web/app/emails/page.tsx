@@ -75,6 +75,47 @@ interface RecipientDetails {
   events: RecipientEvent[];
 }
 
+function formatUserAgent(ua: string | null) {
+  if (!ua) return null;
+  const uaLower = ua.toLowerCase();
+  
+  // 1. Detect Gmail Image Proxy (most common for Gmail tracker)
+  const isGmailProxy = uaLower.includes('googleimageproxy') || uaLower.includes('ggpht.com');
+
+  // 2. Parse Operating System
+  let os = 'Unknown Device';
+  if (uaLower.includes('iphone') || uaLower.includes('ipad') || uaLower.includes('ipod')) {
+    os = 'iPhone/iPad (iOS)';
+  } else if (uaLower.includes('android')) {
+    os = 'Android Mobile/Tablet';
+  } else if (uaLower.includes('macintosh') || uaLower.includes('mac os x')) {
+    os = 'Mac (macOS)';
+  } else if (uaLower.includes('windows')) {
+    os = 'Windows PC';
+  } else if (uaLower.includes('linux')) {
+    os = 'Linux Device';
+  }
+
+  // 3. Parse Browser
+  let browser = 'Web Browser';
+  if (uaLower.includes('edg/')) {
+    browser = 'Microsoft Edge';
+  } else if (uaLower.includes('chrome/') || uaLower.includes('criom/')) {
+    browser = 'Google Chrome';
+  } else if (uaLower.includes('firefox/') || uaLower.includes('fxios/')) {
+    browser = 'Mozilla Firefox';
+  } else if (uaLower.includes('safari/') && !uaLower.includes('chrome/')) {
+    browser = 'Apple Safari';
+  }
+
+  return {
+    os,
+    browser,
+    isGmailProxy,
+    raw: ua
+  };
+}
+
 const API_BASE_URL = `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000'}/api`;
 
 export default function TrackedEmailsPage() {
@@ -537,11 +578,45 @@ export default function TrackedEmailsPage() {
                             <span className="text-zinc-400 text-[10px] ml-2">
                               {dateStr} at {timeStr}
                             </span>
-                            {event.userAgent && (
-                              <p className="text-[10px] text-zinc-500 font-mono mt-1 bg-zinc-50 p-2 rounded border border-zinc-200/50 leading-relaxed truncate">
-                                {event.userAgent}
-                              </p>
-                            )}
+                            {event.userAgent && (() => {
+                              const parsed = formatUserAgent(event.userAgent);
+                              if (!parsed) return null;
+                              return (
+                                <div className="mt-2 bg-zinc-50 p-2.5 rounded-lg border border-zinc-200/50 leading-relaxed text-zinc-600 max-w-full">
+                                  <div className="flex flex-wrap gap-2 items-center">
+                                    {parsed.isGmailProxy ? (
+                                      <span className="inline-flex items-center gap-1 text-[9px] font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100">
+                                        Gmail App / Web Client
+                                      </span>
+                                    ) : (
+                                      <span className="inline-flex items-center gap-1 text-[9px] font-bold text-zinc-700 bg-zinc-100 px-2 py-0.5 rounded border border-zinc-200">
+                                        Direct Open
+                                      </span>
+                                    )}
+                                    <span className="text-[9px] font-medium text-zinc-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-100">
+                                      Device: {parsed.os}
+                                    </span>
+                                    <span className="text-[9px] font-medium text-zinc-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-100">
+                                      Browser: {parsed.browser}
+                                    </span>
+                                  </div>
+                                  {parsed.isGmailProxy && (
+                                    <p className="text-[9px] text-zinc-400 mt-1.5 italic leading-snug">
+                                      Note: Gmail routes images through Google's proxy servers, which can report simulated device info (like Firefox on Windows).
+                                    </p>
+                                  )}
+                                  {/* Expandable Raw User Agent */}
+                                  <details className="mt-1.5 border-t border-zinc-100 pt-1">
+                                    <summary className="text-[9px] text-zinc-400 cursor-pointer hover:text-zinc-600 font-semibold select-none">
+                                      Show technical details
+                                    </summary>
+                                    <p className="text-[9px] text-zinc-400 font-mono mt-1 whitespace-pre-wrap break-all leading-normal bg-zinc-100 p-1.5 rounded">
+                                      {parsed.raw}
+                                    </p>
+                                  </details>
+                                </div>
+                              );
+                            })()}
                           </div>
                         </div>
                       );
