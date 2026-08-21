@@ -11,6 +11,13 @@
     "https://mail.google.com/*",
     "http://localhost:4000/*"
   ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": "logo.svg"
+  },
+  "icons": {
+    "128": "logo.svg"
+  },
   "background": {
     "service_worker": "dist/background.js",
     "type": "module"

@@ -105,7 +105,12 @@ function setupComposeTracking(composeBox: Element) {
     if (connectedEmail && activeGmailEmail && activeGmailEmail.toLowerCase() === connectedEmail.toLowerCase()) {
       statusSpan.innerHTML = `(<span style="color:#16a34a;font-weight:600;">✓</span> Connected: ${connectedEmail})`;
       checkbox.disabled = false;
-      checkbox.checked = true;
+      
+      // Load toggle state from extension storage settings
+      chrome.storage.local.get(['trackingEnabled'], (result) => {
+        checkbox.checked = result.trackingEnabled !== false;
+      });
+
       container.style.display = 'inline-flex';
     } else {
       // Hide the tracking option completely if they don't match or not authenticated

@@ -43,6 +43,29 @@ chrome.runtime.onMessage.addListener(
       return true;
     }
 
+    if (message.type === 'GET_LATEST_ACTIVITY') {
+      fetch(`${API_BASE_URL}/dashboard/stats`, {
+        method: 'GET',
+        credentials: 'include',
+        headers: {
+          'Accept': 'application/json',
+        },
+      })
+        .then(async (response) => {
+          if (!response.ok) {
+            throw new Error(`HTTP error. Status: ${response.status}`);
+          }
+          const data = await response.json();
+          sendResponse({ success: true, data: data.recentEvents || [] });
+        })
+        .catch((error: Error) => {
+          console.error('Failed to get latest activity:', error);
+          sendResponse({ success: false, error: error.message });
+        });
+
+      return true;
+    }
+
     if (message.type === 'OPEN_OAUTH_TAB') {
       chrome.tabs.create({ url: `${API_BASE_URL}/auth/google` });
       sendResponse({ success: true });

@@ -48,9 +48,7 @@ function SessionGate({ children }: { children: React.ReactNode }) {
         <div className="relative w-full max-w-md bg-zinc-900/60 border border-zinc-800/80 rounded-2xl p-8 backdrop-blur-xl shadow-2xl space-y-8">
           {/* Header & Logo */}
           <div className="text-center space-y-2">
-            <div className="w-12 h-12 rounded-xl bg-indigo-600 flex items-center justify-center text-white font-extrabold text-2xl mx-auto shadow-lg shadow-indigo-500/25">
-              D
-            </div>
+            <img src="/logo.svg" alt="Dekha Kya? Logo" className="w-12 h-12 mx-auto shadow-lg shadow-indigo-500/10" />
             <div>
               <h2 className="text-xl font-bold tracking-tight">Sign in to Dekha Kya?</h2>
               <p className="text-xs text-zinc-400 mt-1">Real-time recipient-level Gmail tracking dashboard.</p>
