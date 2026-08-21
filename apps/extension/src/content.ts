@@ -521,3 +521,201 @@ function extractEmailsFromString(text: string): string[] {
 
 // Start observing the page for compose window elements
 initComposeObserver();
+
+// Inject our brand icon into the Gmail top-right header toolbar
+injectToolbarIcon();
+
+function injectToolbarIcon() {
+  // Gmail's settings button or help icon inside the top-right toolbar
+  const settingsBtn = document.querySelector('a[href*="settings"], [aria-label="Settings"], [data-tooltip="Settings"]');
+  if (!settingsBtn) {
+    // Retry in 1s if Gmail UI isn't fully rendered yet
+    setTimeout(injectToolbarIcon, 1000);
+    return;
+  }
+
+  const container = settingsBtn.parentElement;
+  if (!container || container.querySelector('.dekh-kya-toolbar-btn-wrapper')) {
+    return;
+  }
+
+  // Wrapper element
+  const btnWrapper = document.createElement('div');
+  btnWrapper.className = 'dekh-kya-toolbar-btn-wrapper';
+  btnWrapper.style.position = 'relative';
+  btnWrapper.style.display = 'inline-flex';
+  btnWrapper.style.alignItems = 'center';
+  btnWrapper.style.justifyContent = 'center';
+  btnWrapper.style.marginRight = '8px';
+
+  // Toolbar Button
+  const btn = document.createElement('button');
+  btn.className = 'dekh-kya-toolbar-btn';
+  btn.style.background = 'none';
+  btn.style.border = 'none';
+  btn.style.padding = '4px';
+  btn.style.cursor = 'pointer';
+  btn.style.borderRadius = '50%';
+  btn.style.width = '36px';
+  btn.style.height = '36px';
+  btn.style.display = 'flex';
+  btn.style.alignItems = 'center';
+  btn.style.justifyContent = 'center';
+  btn.style.transition = 'background-color 0.15s';
+  btn.title = 'Dekh Kya? Activity Tracker';
+
+  btn.addEventListener('mouseover', () => {
+    btn.style.backgroundColor = 'rgba(60, 64, 67, 0.1)';
+  });
+  btn.addEventListener('mouseout', () => {
+    btn.style.backgroundColor = 'transparent';
+  });
+
+  // Logo Icon image (uses the new open envelope check logo!)
+  const logoImg = document.createElement('img');
+  logoImg.src = chrome.runtime.getURL('logo.png');
+  logoImg.style.width = '20px';
+  logoImg.style.height = '20px';
+  logoImg.style.borderRadius = '50%';
+  btn.appendChild(logoImg);
+
+  // Red dot badge indicator
+  const badge = document.createElement('span');
+  badge.className = 'dekh-kya-badge';
+  badge.style.position = 'absolute';
+  badge.style.top = '4px';
+  badge.style.right = '4px';
+  badge.style.width = '8px';
+  badge.style.height = '8px';
+  badge.style.backgroundColor = '#ea4335'; // Gmail Red
+  badge.style.borderRadius = '50%';
+  badge.style.display = 'none'; // Hidden initially
+  badge.style.border = '2px solid white';
+  btnWrapper.appendChild(badge);
+
+  btnWrapper.appendChild(btn);
+
+  // Insert before settings button in the toolbar
+  container.insertBefore(btnWrapper, settingsBtn);
+
+  // Dropdown UI container
+  const dropdown = document.createElement('div');
+  dropdown.className = 'dekh-kya-dropdown';
+  dropdown.style.position = 'absolute';
+  dropdown.style.top = '40px';
+  dropdown.style.right = '0';
+  dropdown.style.width = '320px';
+  dropdown.style.backgroundColor = '#18181b';
+  dropdown.style.color = '#f4f4f5';
+  dropdown.style.border = '1px solid #27272a';
+  dropdown.style.borderRadius = '8px';
+  dropdown.style.boxShadow = '0 10px 15px -3px rgba(0,0,0,0.3), 0 4px 6px -2px rgba(0,0,0,0.2)';
+  dropdown.style.zIndex = '99999';
+  dropdown.style.display = 'none'; // Hidden initially
+  dropdown.style.padding = '16px';
+  dropdown.style.fontFamily = 'Roboto, Arial, sans-serif';
+
+  dropdown.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #27272a;padding-bottom:12px;margin-bottom:12px;">
+      <div style="display:flex;align-items:center;gap:8px;">
+        <img src="${chrome.runtime.getURL('logo.png')}" style="width:20px;height:20px;border-radius:50%;" />
+        <span style="font-weight:700;font-size:14px;color:#f4f4f5;">Dekh Kya? Activity</span>
+      </div>
+      <button class="dekh-kya-go-dashboard" style="background:#4f46e5;color:white;border:none;border-radius:4px;padding:4px 8px;font-size:11px;font-weight:600;cursor:pointer;">Dashboard</button>
+    </div>
+    <div class="dekh-kya-activities" style="display:flex;flex-direction:column;gap:12px;max-height:300px;overflow-y:auto;min-height:50px;">
+      <div style="text-align:center;color:#a1a1aa;font-size:12px;padding:12px 0;">Loading activity...</div>
+    </div>
+  `;
+
+  btnWrapper.appendChild(dropdown);
+
+  // Click to toggle dropdown view
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const isHidden = dropdown.style.display === 'none';
+    dropdown.style.display = isHidden ? 'block' : 'none';
+    if (isHidden) {
+      badge.style.display = 'none'; // Clear red badge dot
+      fetchToolbarActivities(dropdown.querySelector('.dekh-kya-activities')!);
+    }
+  });
+
+  dropdown.querySelector('.dekh-kya-go-dashboard')?.addEventListener('click', () => {
+    window.open('https://dekha-kya.vercel.app/emails', '_blank');
+  });
+
+  // Close dropdown on clicking outside
+  document.addEventListener('click', () => {
+    dropdown.style.display = 'none';
+  });
+  dropdown.addEventListener('click', (e) => {
+    e.stopPropagation();
+  });
+
+  // Listen for message broadcasts from service worker
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg.type === 'NEW_ACTIVITY_LOGGED') {
+      badge.style.display = 'block'; // Show red dot indicator
+    }
+  });
+}
+
+/**
+ * Fetch top 5 recent opens from backend and display inside in-page dropdown.
+ */
+function fetchToolbarActivities(containerEl: HTMLElement) {
+  chrome.runtime.sendMessage({ type: 'GET_LATEST_ACTIVITY' }, (res) => {
+    containerEl.innerHTML = '';
+    
+    if (res && res.success && Array.isArray(res.data) && res.data.length > 0) {
+      res.data.slice(0, 5).forEach((event: any) => {
+        const item = document.createElement('div');
+        item.style.display = 'flex';
+        item.style.gap = '10px';
+        item.style.fontSize = '12px';
+        item.style.borderBottom = '1px solid #27272a';
+        item.style.paddingBottom = '8px';
+        item.style.lineHeight = '1.4';
+
+        const timeStr = getActivityRelativeTime(event.openedAt);
+
+        item.innerHTML = `
+          <div style="color:#10b981;flex-shrink:0;margin-top:2px;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/>
+              <circle cx="12" cy="12" r="3"/>
+            </svg>
+          </div>
+          <div>
+            <div style="color:#f4f4f5;"><strong>${event.recipientEmail}</strong> opened your email</div>
+            <div style="color:#a1a1aa;font-size:11px;margin-top:1px;">${event.subject}</div>
+            <div style="color:#71717a;font-size:10px;margin-top:2px;">${timeStr}</div>
+          </div>
+        `;
+        containerEl.appendChild(item);
+      });
+    } else {
+      containerEl.innerHTML = '<div style="text-align:center;color:#a1a1aa;font-size:12px;padding:12px 0;font-style:italic;">No recent activity found.</div>';
+    }
+  });
+}
+
+/**
+ * Format relative timestamps.
+ */
+function getActivityRelativeTime(dateStr: string): string {
+  const now = new Date();
+  const past = new Date(dateStr);
+  const diffMs = now.getTime() - past.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+
+  if (diffMins < 1) return 'just now';
+  if (diffMins < 60) return `${diffMins}m ago`;
+  
+  const diffHours = Math.floor(diffMins / 60);
+  if (diffHours < 24) return `${diffHours}h ago`;
+
+  const diffDays = Math.floor(diffHours / 24);
+  return `${diffDays}d ago`;
+}
