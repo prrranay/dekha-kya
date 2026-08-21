@@ -224,10 +224,11 @@ export class AuthController {
       const sessionToken = jwt.sign({ userId: user.id }, secret, { expiresIn: '7d' });
 
       // 5. Save in httpOnly cookie
+      const isProd = process.env.NODE_ENV === 'production' || (process.env.FRONTEND_URL && process.env.FRONTEND_URL.includes('vercel.app'));
       res.cookie('session', sessionToken, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
+        secure: !!isProd,
+        sameSite: isProd ? 'none' : 'lax',
         maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
       });
 
@@ -245,12 +246,13 @@ export class AuthController {
   @ApiOperation({ summary: 'Clear the session cookie and log out the user' })
   async logout(@Res() res: Response) {
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    const isProd = process.env.NODE_ENV === 'production' || (process.env.FRONTEND_URL && process.env.FRONTEND_URL.includes('vercel.app'));
 
     // Clear the session cookie
     res.clearCookie('session', {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
+      secure: !!isProd,
+      sameSite: isProd ? 'none' : 'lax',
     });
 
     console.log('[AUTH] User logged out, session cookie cleared.');
