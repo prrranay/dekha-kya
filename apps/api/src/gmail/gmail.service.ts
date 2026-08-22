@@ -142,7 +142,11 @@ export class GmailService {
     if (cleanCc) headers.push(`Cc: ${cleanCc}`);
     if (cleanBcc) headers.push(`Bcc: ${cleanBcc}`);
 
-    headers.push(`Subject: ${cleanSubject}`);
+    const hasNonAscii = /[^\x00-\x7F]/.test(cleanSubject);
+    const encodedSubject = hasNonAscii
+      ? `=?UTF-8?B?${Buffer.from(cleanSubject, 'utf8').toString('base64')}?=`
+      : cleanSubject;
+    headers.push(`Subject: ${encodedSubject}`);
     headers.push(`Message-ID: ${cleanMessageIdHeader}`);
 
     if (cleanInReplyTo) {
@@ -160,19 +164,25 @@ export class GmailService {
 
     // Plain text content part
     const plain = plainTextBody || this.stripHtmlTags(htmlBody);
+    const plainBase64 = Buffer.from(plain, 'utf8').toString('base64');
+    const formattedPlain = plainBase64.replace(/(.{76})/g, '$1\r\n');
+
     body.push(`--${boundary}`);
-    body.push('Content-Type: text/plain; charset="UTF-8"');
-    body.push('Content-Transfer-Encoding: 7bit');
+    body.push('Content-Type: text/plain; charset=UTF-8');
+    body.push('Content-Transfer-Encoding: base64');
     body.push('');
-    body.push(plain);
+    body.push(formattedPlain);
     body.push('');
 
     // HTML content part
+    const htmlBase64 = Buffer.from(htmlBody, 'utf8').toString('base64');
+    const formattedHtml = htmlBase64.replace(/(.{76})/g, '$1\r\n');
+
     body.push(`--${boundary}`);
-    body.push('Content-Type: text/html; charset="UTF-8"');
-    body.push('Content-Transfer-Encoding: 7bit');
+    body.push('Content-Type: text/html; charset=UTF-8');
+    body.push('Content-Transfer-Encoding: base64');
     body.push('');
-    body.push(htmlBody);
+    body.push(formattedHtml);
     body.push('');
 
     body.push(`--${boundary}--`);
@@ -303,5 +313,55 @@ export class GmailService {
       : lastMessageId;
 
     return { inReplyTo, references, subject: threadSubject };
+  }
+
+  async verifyGmailConnection(userId: string): Promise<{ connected: boolean; email?: string; reason?: string }> {
+    const account = await this.prisma.gmailAccount.findFirst({
+      where: { userId },
+    });
+
+    if (!account) {
+      return { connected: false };
+    }
+
+    try {
+      const oAuth2Client = new google.auth.OAuth2(
+        process.env.GOOGLE_CLIENT_ID,
+        process.env.GOOGLE_CLIENT_SECRET,
+        process.env.GOOGLE_CALLBACK_URL
+      );
+
+      const decryptedAccessToken = this.decryptToken(account.accessToken);
+      const decryptedRefreshToken = this.decryptToken(account.refreshToken);
+
+      oAuth2Client.setCredentials({
+        access_token: decryptedAccessToken,
+        refresh_token: decryptedRefreshToken,
+        expiry_date: account.tokenExpiry.getTime(),
+      });
+
+      // Execute a lightweight getProfile request to test access/refresh credentials
+      const gmail = google.gmail({ version: 'v1', auth: oAuth2Client });
+      await gmail.users.getProfile({ userId: 'me' });
+
+      // Save refreshed credentials if oAuth2Client triggered a tokens refresh
+      const currentCredentials = oAuth2Client.credentials;
+      if (currentCredentials.access_token && currentCredentials.access_token !== decryptedAccessToken) {
+        const encryptedAccess = this.encryptToken(currentCredentials.access_token);
+        const updateData: { accessToken: string; tokenExpiry?: Date } = { accessToken: encryptedAccess };
+        if (currentCredentials.expiry_date) {
+          updateData.tokenExpiry = new Date(currentCredentials.expiry_date);
+        }
+        await this.prisma.gmailAccount.update({
+          where: { id: account.id },
+          data: updateData,
+        });
+      }
+
+      return { connected: true, email: account.email };
+    } catch (error) {
+      console.warn(`[GMAIL_CONNECTION_VERIFY_FAILURE] User ID ${userId}:`, (error as Error).message);
+      return { connected: false, reason: 'RECONNECT_REQUIRED' };
+    }
   }
 }

@@ -1,6 +1,5 @@
 import { Controller, Get, Query, Res, Req, UseGuards, UnauthorizedException, Post, Body } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
-import { UserDto } from '@gmail-tracker/shared';
 import { Response, Request } from 'express';
 import { google } from 'googleapis';
 import * as jwt from 'jsonwebtoken';
@@ -218,26 +217,27 @@ export class AuthController {
     status: 200,
     description: 'User profile retrieved successfully.',
   })
-  async getMe(@CurrentUser() currentUser: { id: string }): Promise<UserDto & { gmailConnected: boolean }> {
+  async getMe(@CurrentUser() currentUser: { id: string }) {
     const user = await this.prisma.user.findUnique({
       where: { id: currentUser.id },
-      include: {
-        accounts: true,
-      },
     });
 
     if (!user) {
       throw new UnauthorizedException('Session user not found in database');
     }
 
+    const gmailStatus = await this.gmailService.verifyGmailConnection(currentUser.id);
+
     return {
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      picture: user.picture || null,
-      createdAt: user.createdAt.toISOString(),
-      updatedAt: user.updatedAt.toISOString(),
-      gmailConnected: user.accounts.length > 0,
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        picture: user.picture || null,
+        createdAt: user.createdAt.toISOString(),
+        updatedAt: user.updatedAt.toISOString(),
+      },
+      gmail: gmailStatus,
     };
   }
 
@@ -254,7 +254,7 @@ export class AuthController {
     }
 
     if (!token) {
-      return { authenticated: false };
+      return { api: true, authenticated: false };
     }
 
     try {
@@ -267,7 +267,7 @@ export class AuthController {
       const userId = decoded.type === 'extension' ? decoded.sub : decoded.userId;
 
       if (!userId) {
-        return { authenticated: false };
+        return { api: true, authenticated: false };
       }
 
       if (decoded.type === 'extension' && decoded.jti) {
@@ -275,25 +275,24 @@ export class AuthController {
           where: { jti: decoded.jti },
         });
         if (!session || session.revokedAt) {
-          return { authenticated: false };
+          return { api: true, authenticated: false };
         }
       }
 
       const user = await this.prisma.user.findUnique({
         where: { id: userId },
-        include: { accounts: true },
       });
 
       if (!user) {
-        return { authenticated: false };
+        return { api: true, authenticated: false };
       }
 
       return {
+        api: true,
         authenticated: true,
-        email: user.email,
       };
     } catch (error) {
-      return { authenticated: false };
+      return { api: true, authenticated: false };
     }
   }
 

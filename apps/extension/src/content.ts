@@ -6,49 +6,76 @@ interface RegisterMessageRecipient {
 
 console.log('Dekha Kya? Gmail tracker content script initialized.');
 
-let frontendUrl = 'http://localhost:3000'; // Fallback default
+let frontendUrl = '';
+
 chrome.runtime.sendMessage({ type: 'GET_FRONTEND_URL' }, (res) => {
   if (res && res.success && res.frontendUrl) {
     frontendUrl = res.frontendUrl;
-    try {
-      const urlObj = new URL(frontendUrl);
-        if (window.location.host === urlObj.host) {
-          document.documentElement.setAttribute('data-dekha-kya-extension', 'true');
-          console.log('Dekha Kya? Extension detected on dashboard page.');
-          window.postMessage({ type: 'DEKHA_KYA_EXTENSION_READY' }, window.location.origin);
-        }
-      } catch (e) {
-        // Ignored
-      }
-    }
-  });
+    initializeExtension();
+  } else {
+    console.error('[DEKHA_KYA] Failed to retrieve frontend configuration from background script.');
+  }
+});
 
-  // Secure message handoff listener
-  window.addEventListener('message', (event) => {
-    if (!frontendUrl) return;
-    try {
-      const trustedOrigin = new URL(frontendUrl).origin;
-      if (event.origin !== trustedOrigin) {
+function isGmailPage(): boolean {
+  return window.location.host === 'mail.google.com';
+}
+
+function isDekhaKyaFrontend(configuredUrl: string): boolean {
+  try {
+    const urlObj = new URL(configuredUrl);
+    return window.location.origin === urlObj.origin;
+  } catch (e) {
+    return false;
+  }
+}
+
+function initializeExtension() {
+  if (isGmailPage()) {
+    console.log('[DEKHA_KYA] Initializing Gmail integration...');
+    // Start observing page for compose window elements
+    initComposeObserver();
+    // Inject our brand icon into the Gmail top-right header toolbar
+    injectToolbarIcon();
+  } else if (isDekhaKyaFrontend(frontendUrl)) {
+    console.log('[DEKHA_KYA] Initializing dashboard bridge...');
+    document.documentElement.setAttribute('data-dekha-kya-extension', 'true');
+
+    // Send initial ready handshake
+    window.postMessage({ type: 'DEKHA_KYA_EXTENSION_READY' }, window.location.origin);
+
+    // Listen for new handoff requests from the extension (e.g. on token expiration)
+    chrome.runtime.onMessage.addListener((msg) => {
+      if (msg.type === 'REQUEST_NEW_HANDOFF') {
+        console.log('[CONTENT] Extension requested new handoff. Forwarding to dashboard...');
+        window.postMessage({ type: 'DEKHA_KYA_REQUEST_HANDOFF' }, window.location.origin);
+      }
+    });
+
+    // Listen for window message handoff from dashboard
+    window.addEventListener('message', (event) => {
+      try {
+        const trustedOrigin = new URL(frontendUrl).origin;
+        if (event.origin !== trustedOrigin) return;
+      } catch (e) {
         return;
       }
-    } catch (e) {
-      return;
-    }
+      if (event.source !== window) return;
 
-    if (event.source !== window) return;
+      const data = event.data;
+      if (!data) return;
 
-    const data = event.data;
-    if (!data) return;
-
-    if (data.type === 'DEKHA_KYA_HANDOFF') {
-      const token = data.token;
-      if (token && /^[0-9a-fA-F]{64}$/.test(token)) {
-        chrome.runtime.sendMessage({ type: 'SAVE_HANDOFF_TOKEN', token });
+      if (data.type === 'DEKHA_KYA_HANDOFF') {
+        const token = data.token;
+        if (token && /^[0-9a-fA-F]{64}$/.test(token)) {
+          chrome.runtime.sendMessage({ type: 'SAVE_HANDOFF_TOKEN', token });
+        }
+      } else if (data.type === 'DEKHA_KYA_PING_EXTENSION') {
+        window.postMessage({ type: 'DEKHA_KYA_EXTENSION_READY' }, window.location.origin);
       }
-    } else if (data.type === 'DEKHA_KYA_PING_EXTENSION') {
-      window.postMessage({ type: 'DEKHA_KYA_EXTENSION_READY' }, window.location.origin);
-    }
-  });
+    });
+  }
+}
 
 
 // Keep track of active observers to prevent duplicates
@@ -711,11 +738,6 @@ function showFailureModal(
   document.body.appendChild(modal);
 }
 
-// Start observing the page for compose window elements
-initComposeObserver();
-
-// Inject our brand icon into the Gmail top-right header toolbar
-injectToolbarIcon();
 
 function injectToolbarIcon() {
   // Gmail's settings button or help icon inside the top-right toolbar
@@ -868,9 +890,6 @@ function injectToolbarIcon() {
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg.type === 'NEW_ACTIVITY_LOGGED') {
       badge.style.display = 'block'; // Show red dot indicator
-    } else if (msg.type === 'REQUEST_NEW_HANDOFF') {
-      console.log('[CONTENT] Extension requested new handoff. Forwarding to dashboard...');
-      window.postMessage({ type: 'DEKHA_KYA_REQUEST_HANDOFF' }, window.location.origin);
     }
   });
 }

@@ -40,12 +40,38 @@ export default function DashboardPage() {
     refetchInterval: 5000, // Poll every 5 seconds for live activity logs
   });
 
-  // Real health check for tracking endpoint/API reachability
-  const { data: healthData } = useQuery({
-    queryKey: ['trackingHealth'],
+  // Verify active user profile and Gmail connection (cached with 2 minutes staleTime)
+  const { data: meData } = useQuery({
+    queryKey: ['authMe'],
+    queryFn: async () => {
+      const res = await fetch(`${API_BASE_URL}/auth/me`, { credentials: 'include' });
+      if (!res.ok) throw new Error('Unauthorized');
+      return res.json();
+    },
+    staleTime: 2 * 60 * 1000, // 2 minutes
+    refetchInterval: 10000,
+  });
+
+  // Separate API reachability check
+  const { data: apiStatusData } = useQuery({
+    queryKey: ['apiStatus'],
     queryFn: async () => {
       try {
         const res = await fetch(`${API_BASE_URL}/auth/status`, { credentials: 'include' });
+        return { reachable: res.ok };
+      } catch (e) {
+        return { reachable: false };
+      }
+    },
+    refetchInterval: 10000,
+  });
+
+  // Separate Tracking Endpoint health check
+  const { data: trackingHealthData } = useQuery({
+    queryKey: ['trackingHealth'],
+    queryFn: async () => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/tracking/health`);
         return { reachable: res.ok };
       } catch (e) {
         return { reachable: false };
@@ -102,24 +128,23 @@ export default function DashboardPage() {
   }, []);
 
   const getExtensionStatus = (lastSeenAt: string | undefined | null) => {
-    if (!lastSeenAt) return { text: 'Not detected', color: 'text-amber-600 bg-amber-50' };
+    if (!lastSeenAt) return { text: 'Not detected', color: 'text-red-600 bg-red-50' };
     const diffMs = Date.now() - new Date(lastSeenAt).getTime();
     const diffMins = diffMs / 60000;
-    const diffSecs = Math.floor(diffMs / 1000);
 
-    if (diffSecs < 120) {
+    if (diffMins < 2) {
       return {
-        text: `Connected (Last seen: ${diffSecs}s ago)`,
+        text: 'Connected',
         color: 'text-emerald-600 bg-emerald-50'
       };
     } else if (diffMins < 10) {
       return {
-        text: `Recently active (Last seen: ${Math.floor(diffMins)}m ago)`,
+        text: 'Recently active',
         color: 'text-amber-600 bg-amber-50'
       };
     } else {
       return {
-        text: `Not detected (Last seen: ${Math.floor(diffMins)}m ago)`,
+        text: 'Not detected',
         color: 'text-red-600 bg-red-50'
       };
     }
@@ -278,21 +303,27 @@ export default function DashboardPage() {
 
             <div className="space-y-3 pt-2">
               <div className="flex items-center justify-between text-xs border-b border-zinc-100 pb-2">
-                <span className="text-zinc-500">Chrome Extension</span>
-                <span className={`font-semibold px-2 py-0.5 rounded-full ${getExtensionStatus(data?.extensionLastSeenAt).color}`}>
-                  {getExtensionStatus(data?.extensionLastSeenAt).text}
-                </span>
-              </div>
-              <div className="flex items-center justify-between text-xs border-b border-zinc-100 pb-2">
-                <span className="text-zinc-500">Gmail API Status</span>
-                <span className={`font-semibold px-2 py-0.5 rounded-full ${data.gmailConnected ? 'text-emerald-600 bg-emerald-50' : 'text-red-600 bg-red-50'}`}>
-                  {data.gmailConnected ? 'Connected' : 'Not connected'}
+                <span className="text-zinc-500">API Status</span>
+                <span className={`font-semibold px-2 py-0.5 rounded-full ${apiStatusData?.reachable ? 'text-emerald-600 bg-emerald-50' : 'text-red-600 bg-red-50'}`}>
+                  {apiStatusData?.reachable ? 'Reachable' : 'Unreachable'}
                 </span>
               </div>
               <div className="flex items-center justify-between text-xs border-b border-zinc-100 pb-2">
                 <span className="text-zinc-500">Tracking Endpoint</span>
-                <span className={`font-semibold px-2 py-0.5 rounded-full ${healthData?.reachable ? 'text-emerald-600 bg-emerald-50' : 'text-red-600 bg-red-50'}`}>
-                  {healthData?.reachable ? 'Reachable' : 'Unreachable'}
+                <span className={`font-semibold px-2 py-0.5 rounded-full ${trackingHealthData?.reachable ? 'text-emerald-600 bg-emerald-50' : 'text-red-600 bg-red-50'}`}>
+                  {trackingHealthData?.reachable ? 'Reachable' : 'Unreachable'}
+                </span>
+              </div>
+              <div className="flex items-center justify-between text-xs border-b border-zinc-100 pb-2">
+                <span className="text-zinc-500">Gmail API Status</span>
+                <span className={`font-semibold px-2 py-0.5 rounded-full ${meData?.gmail?.connected ? 'text-emerald-600 bg-emerald-50' : 'text-red-600 bg-red-50'}`}>
+                  {meData?.gmail?.connected ? 'Connected' : 'Not connected'}
+                </span>
+              </div>
+              <div className="flex items-center justify-between text-xs border-b border-zinc-100 pb-2">
+                <span className="text-zinc-500">Chrome Extension</span>
+                <span className={`font-semibold px-2 py-0.5 rounded-full ${getExtensionStatus(data?.extensionLastSeenAt).color}`}>
+                  {getExtensionStatus(data?.extensionLastSeenAt).text}
                 </span>
               </div>
             </div>

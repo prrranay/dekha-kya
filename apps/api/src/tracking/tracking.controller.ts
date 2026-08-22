@@ -1,27 +1,20 @@
-import { Controller, Post, Body, Get, Param, Res, Req, HttpStatus, UseGuards } from '@nestjs/common';
+import { Controller, Get, Param, Res, Req, HttpStatus } from '@nestjs/common';
 import { Response, Request } from 'express';
 import { ApiTags, ApiOperation, ApiResponse, ApiParam } from '@nestjs/swagger';
 import * as jwt from 'jsonwebtoken';
 import * as crypto from 'crypto';
 import { TrackingService } from './tracking.service';
-import { RegisterMessageDto } from './dto/register-message.dto';
-import { AuthGuard } from '../auth/auth.guard';
-import { CurrentUser } from '../auth/current-user.decorator';
 
 @ApiTags('tracking')
 @Controller('tracking')
 export class TrackingController {
   constructor(private readonly trackingService: TrackingService) {}
 
-  @Post('register-message')
-  @UseGuards(AuthGuard)
-  @ApiOperation({ summary: 'Register a logical message for tracking (manual registry / testing)' })
-  @ApiResponse({ status: 201, description: 'Message tracked successfully.' })
-  async registerMessage(
-    @Body() dto: RegisterMessageDto,
-    @CurrentUser() currentUser: { id: string }
-  ) {
-    return this.trackingService.registerMessage(dto, currentUser.id);
+  @Get('health')
+  @ApiOperation({ summary: 'Public tracking health check endpoint' })
+  @ApiResponse({ status: 200, description: 'Returns tracking service health status.' })
+  async getHealth() {
+    return { status: 'ok' };
   }
 
   @Get('open/:token')

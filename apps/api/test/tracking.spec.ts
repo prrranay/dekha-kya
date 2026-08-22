@@ -16,6 +16,7 @@ interface TestRecipientResponse {
 
 describe('Gmail Email Tracker E2E & Integration Tests', () => {
   let app: INestApplication;
+  let createdRecipients: any[] = [];
 
   // Mock Prisma Queries
   const mockPrismaService = {
@@ -41,26 +42,118 @@ describe('Gmail Email Tracker E2E & Integration Tests', () => {
       ),
     },
     trackedMessage: {
-      create: jest.fn().mockImplementation((args) =>
+      findUnique: jest.fn().mockImplementation((args) => {
+        const msgRecips = createdRecipients.filter(
+          (r) => r.trackedMessageId === args.where.id
+        );
+        return Promise.resolve({
+          id: args.where.id,
+          subject: 'Test Subject',
+          gmailMessageId: 'FAILED',
+          gmailThreadId: 'mock-thread-id-456',
+          trackedThread: {
+            id: 'mock-thread-uuid',
+            userId: 'dev-user-id',
+          },
+          recipients: msgRecips,
+        });
+      }),
+      create: jest.fn().mockImplementation((args) => {
+        const msgId = `mock-msg-uuid-${Math.random().toString(36).substring(2, 9)}`;
+        return Promise.resolve({
+          id: msgId,
+          gmailMessageId: args.data.gmailMessageId,
+          gmailThreadId: args.data.gmailThreadId,
+        });
+      }),
+      update: jest.fn().mockImplementation((args) =>
         Promise.resolve({
-          id: 'mock-msg-uuid',
+          id: args.where.id,
           gmailMessageId: args.data.gmailMessageId,
           gmailThreadId: args.data.gmailThreadId,
         })
       ),
     },
     trackedRecipient: {
-      findUnique: jest.fn(),
-      findFirst: jest.fn(),
-      create: jest.fn().mockImplementation((args) =>
-        Promise.resolve({
-          id: 'mock-recip-uuid',
+      findUnique: jest.fn().mockImplementation((args) => {
+        if (args?.where?.id) {
+          const r = createdRecipients.find((x) => x.id === args.where.id);
+          return Promise.resolve(r || null);
+        }
+        if (args?.where?.trackingToken) {
+          const r = createdRecipients.find((x) => x.trackingToken === args.where.trackingToken);
+          if (r) {
+            return Promise.resolve({
+              ...r,
+              trackedMessage: {
+                id: r.trackedMessageId || 'mock-msg-uuid',
+                gmailMessageId: r.gmailMessageId || 'mock-msg-id-123',
+                gmailThreadId: r.gmailThreadId || 'mock-thread-id-456',
+                userId: 'dev-user-id',
+              },
+            });
+          }
+        }
+        return Promise.resolve(null);
+      }),
+      findFirst: jest.fn().mockImplementation((args) => {
+        const id = args?.where?.id;
+        const msgId = args?.where?.trackedMessageId;
+        let r;
+        if (id) {
+          r = createdRecipients.find((x) => x.id === id);
+        } else if (msgId) {
+          r = createdRecipients.find(
+            (x) => x.trackedMessageId === msgId && (args?.where?.sendStatus ? x.sendStatus === args.where.sendStatus : true)
+          );
+        }
+        if (r) {
+          return Promise.resolve({
+            ...r,
+            trackedMessage: {
+              id: r.trackedMessageId || 'mock-msg-uuid',
+              gmailMessageId: r.gmailMessageId || 'mock-msg-id-123',
+              gmailThreadId: r.gmailThreadId || 'mock-thread-id-456',
+              userId: 'dev-user-id',
+            },
+          });
+        }
+        return Promise.resolve(null);
+      }),
+      findMany: jest.fn().mockImplementation((args) => {
+        if (args?.where?.trackedMessageId) {
+          return Promise.resolve(
+            createdRecipients.filter(
+              (x) => x.trackedMessageId === args.where.trackedMessageId
+            )
+          );
+        }
+        return Promise.resolve(createdRecipients);
+      }),
+      create: jest.fn().mockImplementation((args) => {
+        const r = {
+          id: `mock-recip-uuid-${createdRecipients.length}`,
+          trackedMessageId: args.data.trackedMessageId,
           email: args.data.email,
+          recipientType: args.data.recipientType,
           trackingToken: args.data.trackingToken,
+          sendStatus: args.data.sendStatus || 'PENDING',
+          sendError: args.data.sendError || null,
+          sentAt: args.data.sentAt || null,
           openCount: 0,
-        })
-      ),
-      update: jest.fn(),
+        };
+        createdRecipients.push(r);
+        return Promise.resolve(r);
+      }),
+      update: jest.fn().mockImplementation((args) => {
+        const r = createdRecipients.find((x) => x.id === args.where.id);
+        if (r) {
+          if (args.data.sendStatus !== undefined) r.sendStatus = args.data.sendStatus;
+          if (args.data.sendError !== undefined) r.sendError = args.data.sendError;
+          if (args.data.sentAt !== undefined) r.sentAt = args.data.sentAt;
+        }
+        return Promise.resolve(r || {});
+      }),
     },
     trackingEvent: {
       create: jest.fn().mockResolvedValue({ id: 'mock-event-uuid' }),
@@ -135,6 +228,7 @@ describe('Gmail Email Tracker E2E & Integration Tests', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    createdRecipients = [];
   });
 
   // 1. One recipient
@@ -481,4 +575,120 @@ describe('Gmail Email Tracker E2E & Integration Tests', () => {
 
     expect(res.body.message).toContain('Gmail API simulated outage');
   });
+
+  // 16. CC/BCC isolation
+  it('16. Should ensure CC and BCC recipients get isolated MIME messages without token leaks', async () => {
+    const payload = {
+      subject: 'Isolation Test',
+      htmlBody: '<p>Confidential text</p>',
+      recipients: [
+        { email: 'to-user@gmail.com', recipientType: 'TO' },
+        { email: 'cc-user@gmail.com', recipientType: 'CC' },
+        { email: 'bcc-user@gmail.com', recipientType: 'BCC' },
+      ],
+    };
+
+    const res = await request(app.getHttpServer()).post('/gmail/send').send(payload).expect(201);
+    expect(res.body.recipients).toHaveLength(3);
+
+    const toToken = res.body.recipients.find((r: any) => r.email === 'to-user@gmail.com').trackingToken;
+    const ccToken = res.body.recipients.find((r: any) => r.email === 'cc-user@gmail.com').trackingToken;
+    const bccToken = res.body.recipients.find((r: any) => r.email === 'bcc-user@gmail.com').trackingToken;
+
+    // All tokens must be unique
+    const tokenSet = new Set([toToken, ccToken, bccToken]);
+    expect(tokenSet.size).toBe(3);
+
+    // Each recipient's buildMimeMessage must only contain their own tracking token
+    const calls = mockGmailService.buildMimeMessage.mock.calls;
+    const toCall = calls.find((c: any) => c[0].to.includes('to-user@gmail.com'));
+    const ccCall = calls.find((c: any) => c[0].to.includes('cc-user@gmail.com'));
+    const bccCall = calls.find((c: any) => c[0].to.includes('bcc-user@gmail.com'));
+
+    expect(toCall[0].htmlBody).toContain(toToken);
+    expect(toCall[0].htmlBody).not.toContain(ccToken);
+    expect(toCall[0].htmlBody).not.toContain(bccToken);
+
+    expect(ccCall[0].htmlBody).toContain(ccToken);
+    expect(ccCall[0].htmlBody).not.toContain(toToken);
+    expect(ccCall[0].htmlBody).not.toContain(bccToken);
+
+    expect(bccCall[0].htmlBody).toContain(bccToken);
+    expect(bccCall[0].htmlBody).not.toContain(toToken);
+    expect(bccCall[0].htmlBody).not.toContain(ccToken);
+  });
+
+  // 17. MIME Encoding UTF-8 and Emojis
+  it('17. Should correctly encode multi-byte UTF-8 and emojis in MIME without corruption', () => {
+    if (!process.env.GOOGLE_TOKEN_ENCRYPTION_KEY) {
+      process.env.GOOGLE_TOKEN_ENCRYPTION_KEY = 'a'.repeat(64);
+    }
+    const realGmailService = new GmailService(mockPrismaService as any);
+    const complexBody = '<p>Hello 👋 World 🌍 ! 🚀 Special chars: ₹, é, ñ, 中文</p>';
+    const mime = realGmailService.buildMimeMessage({
+      from: 'sender@gmail.com',
+      to: 'recipient@gmail.com',
+      subject: 'Emoji & UTF-8 Test 🚀',
+      messageIdHeader: '<test-id@mail.gmail.com>',
+      htmlBody: complexBody,
+      plainTextBody: 'Hello 👋 World 🌍 ! 🚀 Special chars: ₹, é, ñ, 中文',
+    });
+
+    expect(mime).toContain('Subject: =?UTF-8?B?');
+    expect(mime).toContain('Content-Type: multipart/alternative;');
+    expect(mime).toContain('Content-Transfer-Encoding: base64');
+
+    // Decode base64 blocks and verify content
+    const base64Blocks = mime.match(/Content-Transfer-Encoding: base64\r?\n\r?\n([A-Za-z0-9+/=\r\n]+)/g);
+    expect(base64Blocks).toBeDefined();
+    expect(base64Blocks!.length).toBeGreaterThanOrEqual(2);
+
+    const decodedParts = base64Blocks!.map((block: string) => {
+      const cleanB64 = block.replace(/Content-Transfer-Encoding: base64\r?\n\r?\n/, '').replace(/\r?\n/g, '');
+      return Buffer.from(cleanB64, 'base64').toString('utf-8');
+    });
+
+    expect(decodedParts.some((p: string) => p.includes('Hello 👋 World 🌍 ! 🚀 Special chars: ₹, é, ñ, 中文'))).toBe(true);
+    expect(decodedParts.some((p: string) => p.includes(complexBody))).toBe(true);
+  });
+
+  // 18. Partial Send Retry
+  it('18. Should only retry failed recipients, preserve original tokens and parent message', async () => {
+    // 1. Send with one success and one fail
+    const payload = {
+      subject: 'Retry Test',
+      htmlBody: '<p>Retry test content</p>',
+      recipients: [
+        { email: 'good@gmail.com', recipientType: 'TO' },
+        { email: 'bad@gmail.com', recipientType: 'TO' },
+      ],
+    };
+
+    // First send
+    const resSend = await request(app.getHttpServer()).post('/gmail/send').send(payload).expect(201);
+    expect(resSend.body.recipients).toHaveLength(2);
+    const msgId = resSend.body.trackedMessageId;
+    const badRecip = resSend.body.recipients.find((r: any) => r.email === 'bad@gmail.com');
+
+    // Manually mark badRecip as FAILED in mock state
+    badRecip.sendStatus = 'FAILED';
+    const foundBad = createdRecipients.find((r) => r.id === badRecip.id);
+    if (foundBad) foundBad.sendStatus = 'FAILED';
+
+    const retryPayload = {
+      trackedMessageId: msgId,
+      recipientIds: [badRecip.id],
+      htmlBody: '<p>Retry test content</p>',
+    };
+
+    const resRetry = await request(app.getHttpServer()).post('/gmail/send/retry').send(retryPayload).expect(201);
+    expect(resRetry.body.status).toBe('sent');
+    expect(resRetry.body.trackedMessageId).toBe(msgId);
+    
+    // Check that original token was preserved
+    const retriedBad = resRetry.body.recipients.find((r: any) => r.id === badRecip.id);
+    expect(retriedBad.trackingToken).toBe(badRecip.trackingToken);
+    expect(retriedBad.sendStatus).toBe('SENT');
+  });
 });
+

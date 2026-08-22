@@ -41,6 +41,12 @@ enum TrackingEventClassification {
   UNKNOWN_OPEN
 }
 
+enum SendStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
 model User {
   id           String         @id @default(uuid())
   googleId     String         @unique
@@ -114,6 +120,9 @@ model TrackedRecipient {
   recipientType    RecipientType
   trackingToken    String            @unique
   gmailMessageId   String?           // Store underlying Gmail copy ID
+  sendStatus       SendStatus        @default(PENDING)
+  sendError        String?
+  sentAt           DateTime?
   firstOpenedAt    DateTime?
   lastOpenedAt     DateTime?
   openCount        Int               @default(0)

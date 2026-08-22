@@ -80,17 +80,12 @@ export class SendOrchestrator {
     const authoritativeFromEmail = gmailAccount.email;
 
     let activeGmailThreadId = inputThreadId || null;
-    let dbThreadId: string | null = null;
-    let dbMessageId: string | null = null;
-    const trackingDomain = process.env.API_PUBLIC_URL || process.env.API_URL || 'http://localhost:4000';
-
     let resolvedInReplyTo = inReplyTo;
     let resolvedReferences = references;
     let activeSubject = subject;
 
     // Resolve reply headers using Gmail API if threadId is provided
     if (activeGmailThreadId) {
-      // 1. Fetch thread metadata & validate it belongs to the authenticated user
       const thread = await this.gmailService.getThreadMetadata(userId, authoritativeFromEmail, activeGmailThreadId);
       if (!thread || !thread.messages || thread.messages.length === 0) {
         throw new HttpException(
@@ -99,7 +94,6 @@ export class SendOrchestrator {
         );
       }
 
-      // 2. Determine the newest message in the thread using internalDate
       const lastMsg = this.gmailService.getLatestThreadMessage(thread);
       if (!lastMsg) {
         throw new HttpException(
@@ -108,7 +102,6 @@ export class SendOrchestrator {
         );
       }
 
-      // 3. Extract Message-ID and References
       let lastMessageId: string | undefined;
       let lastReferences: string | undefined;
       lastMsg.payload?.headers?.forEach((header: any) => {
@@ -154,33 +147,78 @@ export class SendOrchestrator {
       throw new HttpException('No valid recipients provided', HttpStatus.BAD_REQUEST);
     }
 
-    const registeredRecipients: Array<{ email: string; trackingToken: string }> = [];
+    // 1. Initialize DB records BEFORE sending to enable tracking of partial failures
+    let dbThread = null;
+    if (activeGmailThreadId) {
+      dbThread = await this.prisma.trackedThread.findUnique({
+        where: {
+          userId_gmailThreadId: {
+            userId: user.id,
+            gmailThreadId: activeGmailThreadId,
+          },
+        },
+      });
+    }
 
-    // Send individual copies for each recipient to isolate tracking pixels
-    for (let i = 0; i < activeRecipients.length; i++) {
-      const recipient = activeRecipients[i]!;
+    if (!dbThread && activeGmailThreadId) {
+      dbThread = await this.prisma.trackedThread.create({
+        data: {
+          userId: user.id,
+          gmailThreadId: activeGmailThreadId,
+          subject: activeSubject,
+        },
+      });
+    }
+
+    const trackedMessage = await this.prisma.trackedMessage.create({
+      data: {
+        trackedThreadId: dbThread ? dbThread.id : 'PENDING_THREAD_LINK',
+        gmailMessageId: 'PENDING',
+        gmailThreadId: activeGmailThreadId || 'PENDING',
+        messageIdHeader: 'PENDING',
+        direction: 'OUTBOUND',
+        subject: activeSubject,
+        sentAt: new Date(),
+      },
+    });
+
+    const dbRecipients = [];
+    const trackingDomain = process.env.API_PUBLIC_URL || process.env.API_URL || 'http://localhost:4000';
+
+    for (const recipient of activeRecipients) {
       const trackingToken = crypto.randomBytes(24).toString('hex');
+      const dbRecip = await this.prisma.trackedRecipient.create({
+        data: {
+          trackedMessageId: trackedMessage.id,
+          email: recipient.email.toLowerCase(),
+          displayName: recipient.displayName || null,
+          recipientType: recipient.recipientType,
+          trackingToken,
+          sendStatus: 'PENDING',
+        },
+      });
+      dbRecipients.push(dbRecip);
+    }
 
-      // Inject the tracking image into html content
+    let sentCount = 0;
+    let failedCount = 0;
+    let lastError: Error | null = null;
+
+    // 2. Loop and send each recipient-specific MIME copy
+    for (const recipient of dbRecipients) {
       let finalHtml = htmlBody;
       if (!finalHtml.trim() && plainTextBody) {
-        // Fallback plain text conversion with HTML escaping
         finalHtml = `<html><body>${escapeHtml(plainTextBody).replace(/\r?\n/g, '<br>')}</body></html>`;
       }
 
-      const pixelTag = `<img src="${trackingDomain}/api/tracking/open/${trackingToken}" width="1" height="1" alt="" style="display:block;width:1px;height:1px;border:0;">`;
+      const pixelTag = `<img src="${trackingDomain}/api/tracking/open/${recipient.trackingToken}" width="1" height="1" alt="" style="display:block;width:1px;height:1px;border:0;">`;
       if (finalHtml.includes('</body>')) {
         finalHtml = finalHtml.replace('</body>', `${pixelTag}</body>`);
       } else {
         finalHtml = finalHtml + pixelTag;
       }
 
-      // Generate distinct Message-ID header for this specific outbound copy
       const messageIdHeader = `<copy-${crypto.randomBytes(12).toString('hex')}@mail.gmail.com>`;
-
-      // Assemble RFC 2822 MIME where:
-      // - To header contains only this specific recipient (and displayName if present).
-      // - Cc and Bcc are omitted entirely.
       const toHeader = recipient.displayName
         ? `${recipient.displayName} <${recipient.email}>`
         : recipient.email;
@@ -190,37 +228,63 @@ export class SendOrchestrator {
         to: toHeader,
         subject: activeSubject,
         messageIdHeader,
-        inReplyTo: resolvedInReplyTo,
-        references: resolvedReferences,
+        inReplyTo: resolvedInReplyTo || undefined,
+        references: resolvedReferences || undefined,
         htmlBody: finalHtml,
         plainTextBody,
       });
 
-      // Dispatch via Gmail (no simulator fallback in production)
-      let sendResult;
       try {
-        sendResult = await this.gmailService.sendMime(
+        const sendResult = await this.gmailService.sendMime(
           userId,
           authoritativeFromEmail,
           mime,
           activeGmailThreadId || undefined
         );
-        const tokenHashLog = crypto.createHash('sha256').update(trackingToken).digest('hex').slice(0, 12);
+
+        sentCount++;
+        if (!activeGmailThreadId) {
+          activeGmailThreadId = sendResult.gmailThreadId;
+        }
+
+        await this.prisma.trackedRecipient.update({
+          where: { id: recipient.id },
+          data: {
+            sendStatus: 'SENT',
+            sentAt: new Date(),
+            gmailMessageId: sendResult.gmailMessageId,
+          },
+        });
+
+        const tokenHashLog = crypto.createHash('sha256').update(recipient.trackingToken).digest('hex').slice(0, 12);
         console.log(`[GMAIL_SEND_SUCCESS] MessageID: ${sendResult.gmailMessageId} Recipient: ${recipient.email} TokenHash: ${tokenHashLog}`);
       } catch (error: unknown) {
+        lastError = error as Error;
+        failedCount++;
         const err = error as Error;
         console.error(`[GMAIL_SEND_FAILURE] Recipient: ${recipient.email} Error: ${err.message}`);
-        throw error;
-      }
 
-      // If it is the first send and threadId was not provided, capture the returned threadId
-      if (!activeGmailThreadId) {
-        activeGmailThreadId = sendResult.gmailThreadId;
+        await this.prisma.trackedRecipient.update({
+          where: { id: recipient.id },
+          data: {
+            sendStatus: 'FAILED',
+            sendError: err.message || 'Gmail transmission failed',
+          },
+        });
       }
+    }
 
-      // Initialize the logical TrackedThread on the first run (using composite user-scoped index)
-      if (!dbThreadId) {
-        let thread = await this.prisma.trackedThread.findUnique({
+    if (sentCount === 0 && lastError) {
+      throw new HttpException(
+        lastError.message || 'Gmail transmission failed completely',
+        HttpStatus.INTERNAL_SERVER_ERROR
+      );
+    }
+
+    // 3. Post-send cleanup of thread/message pointers
+    if (sentCount > 0 && activeGmailThreadId) {
+      if (!dbThread) {
+        dbThread = await this.prisma.trackedThread.findUnique({
           where: {
             userId_gmailThreadId: {
               userId: user.id,
@@ -229,8 +293,8 @@ export class SendOrchestrator {
           },
         });
 
-        if (!thread) {
-          thread = await this.prisma.trackedThread.create({
+        if (!dbThread) {
+          dbThread = await this.prisma.trackedThread.create({
             data: {
               userId: user.id,
               gmailThreadId: activeGmailThreadId,
@@ -238,49 +302,226 @@ export class SendOrchestrator {
             },
           });
         }
-        dbThreadId = thread.id;
       }
 
-      // Initialize the single logical TrackedMessage on the first run
-      if (!dbMessageId) {
-        const message = await this.prisma.trackedMessage.create({
-          data: {
-            trackedThreadId: dbThreadId,
-            gmailMessageId: sendResult.gmailMessageId, // Store the primary first copy ID
-            gmailThreadId: activeGmailThreadId,
-            messageIdHeader: messageIdHeader,
-            direction: 'OUTBOUND',
-            subject: activeSubject,
-            sentAt: new Date(),
-          },
-        });
-        dbMessageId = message.id;
-        console.log(`[TRACKED_MESSAGE_CREATED] ThreadID: ${activeGmailThreadId} MessageID: ${message.id} Subject: ${activeSubject}`);
-      }
-
-      // Create TrackedRecipient logs linked to the single logical TrackedMessage
-      await this.prisma.trackedRecipient.create({
-        data: {
-          trackedMessageId: dbMessageId,
-          email: recipient.email.toLowerCase(),
-          displayName: recipient.displayName || null,
-          recipientType: recipient.recipientType,
-          trackingToken,
-          gmailMessageId: sendResult.gmailMessageId, // Store underlying copy ID
-        },
+      const firstSent = await this.prisma.trackedRecipient.findFirst({
+        where: { trackedMessageId: trackedMessage.id, sendStatus: 'SENT' },
       });
 
-      registeredRecipients.push({
-        email: recipient.email,
-        trackingToken,
+      await this.prisma.trackedMessage.update({
+        where: { id: trackedMessage.id },
+        data: {
+          trackedThreadId: dbThread.id,
+          gmailThreadId: activeGmailThreadId,
+          gmailMessageId: firstSent?.gmailMessageId || 'FAILED_ALL',
+          messageIdHeader: `<copy-primary@mail.gmail.com>`,
+        },
+      });
+    } else {
+      await this.prisma.trackedMessage.update({
+        where: { id: trackedMessage.id },
+        data: {
+          trackedThreadId: dbThread ? dbThread.id : 'FAILED',
+          gmailThreadId: 'FAILED',
+          gmailMessageId: 'FAILED',
+          messageIdHeader: 'FAILED',
+        },
       });
     }
 
+    const recipientsList = await this.prisma.trackedRecipient.findMany({
+      where: { trackedMessageId: trackedMessage.id },
+      select: {
+        id: true,
+        email: true,
+        recipientType: true,
+        sendStatus: true,
+        sendError: true,
+        trackingToken: true,
+      },
+    });
+
+    const mappedRecipients = recipientsList.map((r) => ({
+      id: r.id,
+      email: r.email,
+      recipientType: r.recipientType,
+      sendStatus: r.sendStatus,
+      sendErrorCode: r.sendError || undefined,
+      trackingToken: r.trackingToken,
+    }));
+
+    let finalStatus: 'sent' | 'partial' | 'failed' = 'failed';
+    if (failedCount === 0) {
+      finalStatus = 'sent';
+    } else if (sentCount > 0) {
+      finalStatus = 'partial';
+    }
+
     return {
-      success: true,
-      gmailThreadId: activeGmailThreadId,
-      trackedMessageId: dbMessageId,
-      recipients: registeredRecipients,
+      success: sentCount > 0,
+      status: finalStatus,
+      sentCount,
+      failedCount,
+      recipients: mappedRecipients,
+      gmailThreadId: activeGmailThreadId || undefined,
+      trackedMessageId: trackedMessage.id,
+    };
+  }
+
+  async retry(dto: { trackedMessageId: string; recipientIds: string[]; htmlBody: string; plainTextBody?: string }, userId: string) {
+    const { trackedMessageId, recipientIds, htmlBody, plainTextBody } = dto;
+
+    const message = await this.prisma.trackedMessage.findUnique({
+      where: { id: trackedMessageId },
+      include: {
+        trackedThread: true,
+        recipients: true,
+      },
+    });
+
+    if (!message) {
+      throw new HttpException('Tracked message not found', HttpStatus.NOT_FOUND);
+    }
+
+    if (message.trackedThread.userId !== userId) {
+      throw new UnauthorizedException('You do not own this tracked message');
+    }
+
+    const gmailAccount = await this.prisma.gmailAccount.findFirst({
+      where: { userId },
+    });
+
+    if (!gmailAccount) {
+      throw new HttpException('Gmail is not connected', HttpStatus.CONFLICT);
+    }
+
+    const authoritativeFromEmail = gmailAccount.email;
+    const trackingDomain = process.env.API_PUBLIC_URL || process.env.API_URL || 'http://localhost:4000';
+
+    let sentCount = 0;
+    let failedCount = 0;
+
+    const targets = message.recipients.filter(
+      (r) => recipientIds.includes(r.id) && r.sendStatus === 'FAILED'
+    );
+
+    for (const recipient of targets) {
+      let finalHtml = htmlBody;
+      if (!finalHtml.trim() && plainTextBody) {
+        finalHtml = `<html><body>${escapeHtml(plainTextBody).replace(/\r?\n/g, '<br>')}</body></html>`;
+      }
+
+      const pixelTag = `<img src="${trackingDomain}/api/tracking/open/${recipient.trackingToken}" width="1" height="1" alt="" style="display:block;width:1px;height:1px;border:0;">`;
+      if (finalHtml.includes('</body>')) {
+        finalHtml = finalHtml.replace('</body>', `${pixelTag}</body>`);
+      } else {
+        finalHtml = finalHtml + pixelTag;
+      }
+
+      const messageIdHeader = `<copy-${crypto.randomBytes(12).toString('hex')}@mail.gmail.com>`;
+      const toHeader = recipient.displayName
+        ? `${recipient.displayName} <${recipient.email}>`
+        : recipient.email;
+
+      const mime = this.gmailService.buildMimeMessage({
+        from: authoritativeFromEmail,
+        to: toHeader,
+        subject: message.subject,
+        messageIdHeader,
+        htmlBody: finalHtml,
+        plainTextBody,
+      });
+
+      try {
+        const sendResult = await this.gmailService.sendMime(
+          userId,
+          authoritativeFromEmail,
+          mime,
+          message.gmailThreadId || undefined
+        );
+
+        sentCount++;
+
+        await this.prisma.trackedRecipient.update({
+          where: { id: recipient.id },
+          data: {
+            sendStatus: 'SENT',
+            sentAt: new Date(),
+            gmailMessageId: sendResult.gmailMessageId,
+            sendError: null,
+          },
+        });
+
+        const tokenHashLog = crypto.createHash('sha256').update(recipient.trackingToken).digest('hex').slice(0, 12);
+        console.log(`[GMAIL_RETRY_SUCCESS] MessageID: ${sendResult.gmailMessageId} Recipient: ${recipient.email} TokenHash: ${tokenHashLog}`);
+      } catch (error: unknown) {
+        failedCount++;
+        const err = error as Error;
+        console.error(`[GMAIL_RETRY_FAILURE] Recipient: ${recipient.email} Error: ${err.message}`);
+
+        await this.prisma.trackedRecipient.update({
+          where: { id: recipient.id },
+          data: {
+            sendStatus: 'FAILED',
+            sendError: err.message || 'Gmail transmission failed',
+          },
+        });
+      }
+    }
+
+    if (sentCount > 0 && (message.gmailMessageId === 'FAILED' || message.gmailMessageId === 'PENDING')) {
+      const firstSent = await this.prisma.trackedRecipient.findFirst({
+        where: { trackedMessageId: message.id, sendStatus: 'SENT' },
+      });
+      if (firstSent) {
+        await this.prisma.trackedMessage.update({
+          where: { id: message.id },
+          data: {
+            gmailMessageId: firstSent.gmailMessageId || 'FAILED_ALL',
+          },
+        });
+      }
+    }
+
+    const recipientsList = await this.prisma.trackedRecipient.findMany({
+      where: { trackedMessageId: message.id },
+      select: {
+        id: true,
+        email: true,
+        recipientType: true,
+        sendStatus: true,
+        sendError: true,
+        trackingToken: true,
+      },
+    });
+
+    const mappedRecipients = recipientsList.map((r) => ({
+      id: r.id,
+      email: r.email,
+      recipientType: r.recipientType,
+      sendStatus: r.sendStatus,
+      sendErrorCode: r.sendError || undefined,
+      trackingToken: r.trackingToken,
+    }));
+
+    const totalSent = recipientsList.filter((r) => r.sendStatus === 'SENT').length;
+    const totalFailed = recipientsList.filter((r) => r.sendStatus === 'FAILED').length;
+
+    let finalStatus: 'sent' | 'partial' | 'failed' = 'failed';
+    if (totalFailed === 0) {
+      finalStatus = 'sent';
+    } else if (totalSent > 0) {
+      finalStatus = 'partial';
+    }
+
+    return {
+      success: totalSent > 0,
+      status: finalStatus,
+      sentCount: totalSent,
+      failedCount: totalFailed,
+      recipients: mappedRecipients,
+      gmailThreadId: message.gmailThreadId,
+      trackedMessageId: message.id,
     };
   }
 }
@@ -316,6 +557,16 @@ export class GmailController {
       console.error('Failed orchestrating Gmail send:', error);
       throw new InternalServerErrorException(err.message || 'Gmail transmission failed');
     }
+  }
+
+  @Post('send/retry')
+  @UseGuards(AuthGuard)
+  @ApiOperation({ summary: 'Retry sending to failed recipients for a tracked message' })
+  async retryMail(
+    @Body() dto: { trackedMessageId: string; recipientIds: string[]; htmlBody: string; plainTextBody?: string },
+    @CurrentUser() currentUser: { id: string }
+  ) {
+    return this.orchestrator.retry(dto, currentUser.id);
   }
 
   @Post('sync')

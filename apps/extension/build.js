@@ -59,10 +59,28 @@ if (fs.existsSync(manifestPath)) {
     }
   ];
 
+  // Build-time validation: fail if required permissions are missing
+  const expectedHostPerms = ["https://mail.google.com/*", apiHostPermission];
+  for (const hp of expectedHostPerms) {
+    if (!manifest.host_permissions.includes(hp)) {
+      console.error(`[BUILD_ERROR] Missing expected host permission: ${hp}`);
+      process.exit(1);
+    }
+  }
+
+  const expectedMatches = ["https://mail.google.com/*", frontendHostPermission];
+  for (const match of expectedMatches) {
+    if (!manifest.content_scripts[0].matches.includes(match)) {
+      console.error(`[BUILD_ERROR] Missing expected content script match: ${match}`);
+      process.exit(1);
+    }
+  }
+
   fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
-  console.log('[BUILD] Updated manifest.json permissions and matches.');
+  console.log('[BUILD] Updated and validated manifest.json permissions.');
 } else {
   console.error('[BUILD] manifest.json not found!');
+  process.exit(1);
 }
 
 // 4. Run TypeScript compilation

@@ -238,6 +238,16 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   }
 });
 
+// Run immediately on background service worker startup
+pollLatestActivity();
+sendHeartbeat();
+
+// Schedule every 30 seconds while the service worker is active
+setInterval(() => {
+  pollLatestActivity();
+  sendHeartbeat();
+}, 30000);
+
 function pollLatestActivity() {
   fetchWithAuth(`${API_BASE_URL}/dashboard/stats`, { method: 'GET' })
     .then((res) => {
