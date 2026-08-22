@@ -577,9 +577,12 @@ describe('Gmail Email Tracker E2E & Integration Tests', () => {
     const res = await request(app.getHttpServer())
       .post('/gmail/send')
       .send(payload)
-      .expect(500);
+      .expect(201);
 
-    expect(res.body.message).toContain('Gmail API simulated outage');
+    expect(res.body.success).toBe(false);
+    expect(res.body.status).toBe('failed');
+    expect(res.body.recipients[0].sendStatus).toBe('FAILED');
+    expect(res.body.recipients[0].sendErrorCode).toContain('Gmail API simulated outage');
   });
 
   // 16. CC/BCC isolation

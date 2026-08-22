@@ -354,18 +354,30 @@ async function handleTrackedSend(composeBox: Element, senderEmail: string, check
       type: 'SEND_TRACKED_EMAIL',
       payload: sendPayload,
     },
-    (response: { success: boolean; error?: string } | undefined) => {
-      if (response && response.success) {
+    (response: { success: boolean; data?: any; error?: string } | undefined) => {
+      if (response && response.success && response.data && response.data.success) {
         console.log('Tracked email successfully dispatched!');
         
         // Suppress the native "Draft discarded" toast that is triggered by programmatic click
         suppressGmailDiscardToast();
 
-        // Show "Message sent." toast with link to Sent folder and dashboard monitor link
-        showGmailToast('Message sent.', [
-          { text: 'View message', url: '#sent' },
-          { text: 'Monitor reply', url: `${frontendUrl}/emails`, target: '_blank' }
-        ]);
+        if (response.data.status === 'partial') {
+          const failedEmails = response.data.recipients
+            .filter((r: any) => r.sendStatus === 'FAILED')
+            .map((r: any) => r.email)
+            .join(', ');
+          
+          showGmailToast(`${response.data.sentCount} of ${response.data.recipients.length} sent. Failed: ${failedEmails}`, [
+            { text: 'View message', url: '#sent' },
+            { text: 'Dashboard', url: `${frontendUrl}/emails`, target: '_blank' }
+          ]);
+        } else {
+          // Show "Message sent." toast with link to Sent folder and dashboard monitor link
+          showGmailToast('Message sent.', [
+            { text: 'View message', url: '#sent' },
+            { text: 'Monitor reply', url: `${frontendUrl}/emails`, target: '_blank' }
+          ]);
+        }
 
         // Keep composeBox hidden so there is no flash while it closes programmatically
         // Close the Gmail compose window programmatically to sync/discard draft
@@ -377,7 +389,8 @@ async function handleTrackedSend(composeBox: Element, senderEmail: string, check
           composeBox.remove();
         }
       } else {
-        console.error('Failed sending tracked email:', response?.error);
+        const errorMsg = response?.error || (response?.data && response.data.message) || 'Unknown error';
+        console.error('Failed sending tracked email:', errorMsg);
         
         // Remove the "Sending..." toast
         const existing = document.querySelector('.custom-gmail-toast');

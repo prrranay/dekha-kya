@@ -211,7 +211,6 @@ export class SendOrchestrator {
 
     let sentCount = 0;
     let failedCount = 0;
-    let lastError: Error | null = null;
 
     // 2. Loop and send each recipient-specific MIME copy
     for (const recipient of dbRecipients) {
@@ -268,7 +267,6 @@ export class SendOrchestrator {
         const tokenHashLog = crypto.createHash('sha256').update(recipient.trackingToken).digest('hex').slice(0, 12);
         console.log(`[GMAIL_SEND_SUCCESS] MessageID: ${sendResult.gmailMessageId} Recipient: ${recipient.email} TokenHash: ${tokenHashLog}`);
       } catch (error: unknown) {
-        lastError = error as Error;
         failedCount++;
         const err = error as Error;
         console.error(`[GMAIL_SEND_FAILURE] Recipient: ${recipient.email} Error: ${err.message}`);
@@ -373,21 +371,7 @@ export class SendOrchestrator {
       finalStatus = 'partial';
     }
 
-    if (sentCount === 0 && lastError) {
-      throw new HttpException(
-        {
-          success: false,
-          status: finalStatus,
-          sentCount,
-          failedCount,
-          recipients: mappedRecipients,
-          gmailThreadId: dbThread.gmailThreadId,
-          trackedMessageId: trackedMessage.id,
-          message: lastError.message || 'Gmail transmission failed completely',
-        },
-        HttpStatus.INTERNAL_SERVER_ERROR
-      );
-    }
+
 
     return {
       success: sentCount > 0,
