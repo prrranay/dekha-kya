@@ -1,7 +1,8 @@
-import { Controller, Post, Body, Get, Param, Res, Req, Query, HttpStatus, UseGuards } from '@nestjs/common';
+import { Controller, Post, Body, Get, Param, Res, Req, HttpStatus, UseGuards } from '@nestjs/common';
 import { Response, Request } from 'express';
-import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiQuery } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiParam } from '@nestjs/swagger';
 import * as jwt from 'jsonwebtoken';
+import * as crypto from 'crypto';
 import { TrackingService } from './tracking.service';
 import { RegisterMessageDto } from './dto/register-message.dto';
 import { AuthGuard } from '../auth/auth.guard';
@@ -26,11 +27,9 @@ export class TrackingController {
   @Get('open/:token')
   @ApiOperation({ summary: 'Serve the 1x1 transparent tracking pixel and log recipient opens' })
   @ApiParam({ name: 'token', description: 'Unique recipient tracking token' })
-  @ApiQuery({ name: 'sender', required: false, description: 'True if client self-preview open, logs as SELF_OPEN' })
   @ApiResponse({ status: 200, description: 'Tracking pixel GIF file returned.' })
   async trackOpen(
     @Param('token') token: string,
-    @Query('sender') senderQuery: string,
     @Req() req: Request,
     @Res() res: Response
   ) {
@@ -54,7 +53,6 @@ export class TrackingController {
     const userAgent = req.headers['user-agent'];
     const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress;
     const referer = req.headers['referer'];
-    const isSelf = senderQuery === 'true';
 
     // 2. Extract sessionUserId from cookie or authorization/x-session-token header to evaluate SELF_OPEN heuristic
     let sessionUserId: string | undefined = undefined;
@@ -82,9 +80,10 @@ export class TrackingController {
     // 3. Await database operation to ensure pixel tracking reliability.
     // Suppress exceptions to avoid leaking token status or breaking image rendering.
     try {
-      await this.trackingService.recordOpen(token, { userAgent, ip, referer, isSelf, sessionUserId });
+      await this.trackingService.recordOpen(token, { userAgent, ip, referer, sessionUserId });
     } catch (err) {
-      console.error(`Failed/Invalid open for token ${token}:`, (err as Error).message);
+      const tokenHashLog = crypto.createHash('sha256').update(token).digest('hex').slice(0, 12);
+      console.error(`[INVALID_TRACKING_TOKEN] Failed open for token hash=${tokenHashLog}:`, (err as Error).message);
     }
 
     return res.status(HttpStatus.OK).send(pixel);

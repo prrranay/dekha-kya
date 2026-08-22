@@ -92,7 +92,7 @@ export class TrackingService {
    */
   async recordOpen(
     token: string,
-    metadata: { userAgent?: string; ip?: string; referer?: string; isSelf?: boolean; sessionUserId?: string }
+    metadata: { userAgent?: string; ip?: string; referer?: string; sessionUserId?: string }
   ): Promise<void> {
     const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
     const tokenHashLog = tokenHash.slice(0, 12);
@@ -133,15 +133,11 @@ export class TrackingService {
 
     // 3. Determine classification (DETECTED_OPEN, SELF_OPEN, UNKNOWN_OPEN)
     // Classify as SELF_OPEN if the session user matches the thread owner (authenticated context).
-    // Do NOT trust metadata.isSelf (?sender=true) without authenticated context.
     let classification: 'DETECTED_OPEN' | 'SELF_OPEN' | 'UNKNOWN_OPEN' = 'UNKNOWN_OPEN';
     const belongsToSender = metadata.sessionUserId && recipient.trackedMessage.trackedThread.userId === metadata.sessionUserId;
 
     if (belongsToSender) {
       classification = 'SELF_OPEN';
-    } else if (metadata.isSelf) {
-      // ?sender=true query parameter replayed without authenticated context
-      classification = 'UNKNOWN_OPEN';
     } else if (source === 'GOOGLE_PROXY') {
       classification = 'DETECTED_OPEN';
     } else if (source === 'DIRECT') {

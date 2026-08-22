@@ -349,64 +349,80 @@ export class AuthController {
     const tokenHashLog = tokenHash.slice(0, 12);
     const now = new Date();
 
-    // Perform atomic transaction consumption
-    const updateResult = await this.prisma.handoffToken.updateMany({
-      where: {
-        tokenHash,
-        consumedAt: null,
-        expiresAt: { gt: now },
-      },
-      data: {
-        consumedAt: now,
-      },
+    const result = await this.prisma.$transaction(async (tx) => {
+      // Perform atomic transaction consumption
+      const updateResult = await tx.handoffToken.updateMany({
+        where: {
+          tokenHash,
+          consumedAt: null,
+          expiresAt: { gt: now },
+        },
+        data: {
+          consumedAt: now,
+        },
+      });
+
+      if (updateResult.count !== 1) {
+        throw new UnauthorizedException('Handoff token is invalid, expired, or already consumed');
+      }
+
+      const handoff = await tx.handoffToken.findUnique({
+        where: { tokenHash },
+      });
+
+      if (!handoff) {
+        throw new UnauthorizedException('Handoff token lookup failed');
+      }
+
+      const secret = process.env.SESSION_SECRET;
+      if (!secret) {
+        throw new Error('SESSION_SECRET is required but not configured.');
+      }
+
+      const jti = crypto.randomUUID();
+      const expiresInSeconds = 15 * 60; // 15 minutes
+
+      // Track extension session inside the transaction
+      await tx.extensionSession.create({
+        data: {
+          jti,
+          userId: handoff.userId,
+          expiresAt: new Date(Date.now() + expiresInSeconds * 1000),
+        },
+      });
+
+      return {
+        userId: handoff.userId,
+        jti,
+        expiresInSeconds,
+      };
+    }).catch((err) => {
+      if (err instanceof UnauthorizedException) {
+        console.warn(`[HANDOFF_EXCHANGE_FAILURE] Token ${tokenHashLog} not found, expired, or already consumed`);
+      } else {
+        console.error(`[HANDOFF_EXCHANGE_ERROR] Unexpected error during transaction for ${tokenHashLog}:`, err.message);
+      }
+      throw err;
     });
 
-    if (updateResult.count !== 1) {
-      console.warn(`[HANDOFF_EXCHANGE_FAILURE] Token ${tokenHashLog} not found, expired, or already consumed`);
-      throw new UnauthorizedException('Handoff token is invalid, expired, or already consumed');
-    }
-
-    const handoff = await this.prisma.handoffToken.findUnique({
-      where: { tokenHash },
-    });
-
-    if (!handoff) {
-      throw new UnauthorizedException('Handoff token lookup failed');
-    }
-
-    const secret = process.env.SESSION_SECRET;
-    if (!secret) {
-      throw new Error('SESSION_SECRET is required but not configured.');
-    }
-
-    const jti = crypto.randomUUID();
-    const expiresInSeconds = 15 * 60; // 15 minutes
+    const secret = process.env.SESSION_SECRET!;
     const accessToken = jwt.sign(
       {
-        sub: handoff.userId,
+        sub: result.userId,
         type: 'extension',
       },
       secret,
       {
-        expiresIn: expiresInSeconds,
-        jwtid: jti,
+        expiresIn: result.expiresInSeconds,
+        jwtid: result.jti,
       }
     );
 
-    // Track extension session for revocation checking
-    await this.prisma.extensionSession.create({
-      data: {
-        jti,
-        userId: handoff.userId,
-        expiresAt: new Date(Date.now() + expiresInSeconds * 1000),
-      },
-    });
-
-    console.log(`[HANDOFF_EXCHANGE_SUCCESS] User ${handoff.userId} session ${jti} created`);
+    console.log(`[HANDOFF_EXCHANGE_SUCCESS] User ${result.userId} session ${result.jti} created`);
 
     return {
       accessToken,
-      expiresAt: Date.now() + expiresInSeconds * 1000,
+      expiresAt: Date.now() + result.expiresInSeconds * 1000,
     };
   }
 

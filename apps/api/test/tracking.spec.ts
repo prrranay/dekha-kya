@@ -314,8 +314,8 @@ describe('Gmail Email Tracker E2E & Integration Tests', () => {
     expect(mockPrismaService.trackingEvent.create).toHaveBeenCalledTimes(1);
   });
 
-  // 10. Self-open unauthenticated
-  it('10. Should flag category as UNKNOWN_OPEN when sender=true query is provided without session', async () => {
+  // 10. Self-open unauthenticated (no user-agent -> UNKNOWN_OPEN)
+  it('10. Should flag category as UNKNOWN_OPEN when no user-agent is supplied', async () => {
     const token = 'abcdefabcdefabcdefabcdefabcdef12';
 
     mockPrismaService.trackedRecipient.findUnique.mockResolvedValueOnce({
@@ -330,7 +330,8 @@ describe('Gmail Email Tracker E2E & Integration Tests', () => {
     });
 
     await request(app.getHttpServer())
-      .get(`/tracking/open/${token}?sender=true`)
+      .get(`/tracking/open/${token}`)
+      .set('User-Agent', '')
       .expect(200);
 
     expect(mockPrismaService.trackingEvent.create).toHaveBeenCalledWith(

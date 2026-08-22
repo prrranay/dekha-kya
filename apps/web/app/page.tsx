@@ -54,41 +54,50 @@ export default function DashboardPage() {
     refetchInterval: 10000,
   });
 
+  const handoffInProgressRef = React.useRef(false);
+
   // Handoff linkage flow
   React.useEffect(() => {
     const handleHandoff = async () => {
-      // Check if extension indicator is present in DOM
-      const hasExtension = document.documentElement.hasAttribute('data-dekha-kya-extension');
-      if (!hasExtension) return;
+      if (handoffInProgressRef.current) return;
+      handoffInProgressRef.current = true;
 
       try {
         const res = await fetch(`${API_BASE_URL}/auth/extension/handoff`, { method: 'POST', credentials: 'include' });
-        if (!res.ok) return;
-        const result = await res.json();
-        if (result && result.rawToken) {
-          // Dispatch via postMessage to window using configured origin
-          window.postMessage(
-            { type: 'DEKHA_KYA_HANDOFF', token: result.rawToken },
-            window.location.origin
-          );
+        if (res.ok) {
+          const result = await res.json();
+          if (result && result.rawToken) {
+            // Dispatch via postMessage to window using configured origin
+            window.postMessage(
+              { type: 'DEKHA_KYA_HANDOFF', token: result.rawToken },
+              window.location.origin
+            );
+          }
         }
       } catch (e) {
         console.error('Failed to trigger extension handoff:', e);
+      } finally {
+        handoffInProgressRef.current = false;
       }
     };
 
-    // Trigger handoff on page load
-    handleHandoff();
-
-    // Listen for new handoff requests from the extension (e.g. on token expiration)
+    // Listen for events from the extension
     const messageListener = (event: MessageEvent) => {
       if (event.origin !== window.location.origin) return;
-      if (event.data && event.data.type === 'DEKHA_KYA_REQUEST_HANDOFF') {
+      const data = event.data;
+      if (!data) return;
+
+      if (data.type === 'DEKHA_KYA_EXTENSION_READY' || data.type === 'DEKHA_KYA_REQUEST_HANDOFF') {
+        console.log(`[DASHBOARD] Received ${data.type} from extension. Generating handoff token...`);
         handleHandoff();
       }
     };
 
     window.addEventListener('message', messageListener);
+
+    // Dispatch ping message on page load in case extension is already loaded
+    window.postMessage({ type: 'DEKHA_KYA_PING_EXTENSION' }, window.location.origin);
+
     return () => window.removeEventListener('message', messageListener);
   }, []);
 
@@ -277,7 +286,7 @@ export default function DashboardPage() {
               <div className="flex items-center justify-between text-xs border-b border-zinc-100 pb-2">
                 <span className="text-zinc-500">Gmail API Status</span>
                 <span className={`font-semibold px-2 py-0.5 rounded-full ${data.gmailConnected ? 'text-emerald-600 bg-emerald-50' : 'text-red-600 bg-red-50'}`}>
-                  {data.gmailConnected ? 'Connected' : 'Disconnected'}
+                  {data.gmailConnected ? 'Connected' : 'Not connected'}
                 </span>
               </div>
               <div className="flex items-center justify-between text-xs border-b border-zinc-100 pb-2">

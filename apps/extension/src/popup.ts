@@ -72,7 +72,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 </svg>
               </div>
               <div class="activity-details">
-                <div class="activity-text"><strong>${event.recipientEmail}</strong> opened your email</div>
+                <div class="activity-text">Detected email activity from <strong>${event.recipientEmail}</strong></div>
                 <div class="activity-subject">${event.subject}</div>
                 <div class="activity-time">${timeStr}</div>
               </div>

@@ -46,16 +46,29 @@ async function getValidToken(): Promise<string | null> {
 // Request any active dashboard tab to fetch a new handoff token
 async function requestHandoffFromDashboard(): Promise<boolean> {
   return new Promise((resolve) => {
-    chrome.tabs.query({}, (tabs) => {
-      let requested = false;
-      for (const tab of tabs) {
-        if (tab.id && tab.url && (tab.url.includes('localhost:3000') || tab.url.includes('vercel.app') || tab.url.includes('ngrok-free.dev'))) {
-          chrome.tabs.sendMessage(tab.id, { type: 'REQUEST_NEW_HANDOFF' }).catch(() => {});
-          requested = true;
+    try {
+      const trustedOrigin = new URL(FRONTEND_URL).origin;
+      chrome.tabs.query({}, (tabs) => {
+        let requested = false;
+        for (const tab of tabs) {
+          if (tab.id && tab.url) {
+            try {
+              const tabOrigin = new URL(tab.url).origin;
+              if (tabOrigin === trustedOrigin) {
+                chrome.tabs.sendMessage(tab.id, { type: 'REQUEST_NEW_HANDOFF' }).catch(() => {});
+                requested = true;
+              }
+            } catch (e) {
+              // Ignore invalid/non-HTTP tab URLs like chrome://
+            }
+          }
         }
-      }
-      resolve(requested);
-    });
+        resolve(requested);
+      });
+    } catch (err) {
+      console.error('[BACKGROUND] Invalid FRONTEND_URL:', err);
+      resolve(false);
+    }
   });
 }
 
@@ -70,12 +83,23 @@ async function fetchWithAuth(url: string, options: RequestInit = {}, retryCount 
 
   const res = await fetch(url, { ...options, headers });
 
-  if (res.status === 401 && retryCount < 1) {
-    console.warn('[BACKGROUND] Bearer token rejected with 401. Revoking token and retrying...');
-    await new Promise<void>((resolve) => {
-      chrome.storage.local.remove(['extensionToken', 'tokenExpiry'], () => resolve());
-    });
-    return fetchWithAuth(url, options, retryCount + 1);
+  if (res.status === 401) {
+    if (retryCount < 1) {
+      console.warn('[BACKGROUND] Bearer token rejected with 401. Revoking token and retrying...');
+      await new Promise<void>((resolve) => {
+        chrome.storage.local.remove(['extensionToken', 'tokenExpiry'], () => resolve());
+      });
+      return fetchWithAuth(url, options, retryCount + 1);
+    } else {
+      console.error('[BACKGROUND] Re-authentication failed after 401 retry.');
+      chrome.notifications.create(`auth-fail-${Date.now()}`, {
+        type: 'basic',
+        iconUrl: 'logo.png',
+        title: 'Connection Required',
+        message: 'Dekha Kya? extension session expired. Please open the dashboard to reconnect.',
+        priority: 2
+      });
+    }
   }
 
   return res;
@@ -234,8 +258,8 @@ function pollLatestActivity() {
             chrome.notifications.create(`open-${Date.now()}`, {
               type: 'basic',
               iconUrl: 'logo.png',
-              title: latestEvent.subject || 'Email Opened',
-              message: `✓✓ ${latestEvent.recipientEmail} has just read your email`,
+              title: latestEvent.subject || 'Detected Open',
+              message: `Detected email activity from ${latestEvent.recipientEmail}`,
               priority: 2
             });
             

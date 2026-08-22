@@ -12,38 +12,43 @@ chrome.runtime.sendMessage({ type: 'GET_FRONTEND_URL' }, (res) => {
     frontendUrl = res.frontendUrl;
     try {
       const urlObj = new URL(frontendUrl);
-      if (window.location.host === urlObj.host) {
-        document.documentElement.setAttribute('data-dekha-kya-extension', 'true');
-        console.log('Dekha Kya? Extension detected on dashboard page.');
+        if (window.location.host === urlObj.host) {
+          document.documentElement.setAttribute('data-dekha-kya-extension', 'true');
+          console.log('Dekha Kya? Extension detected on dashboard page.');
+          window.postMessage({ type: 'DEKHA_KYA_EXTENSION_READY' }, window.location.origin);
+        }
+      } catch (e) {
+        // Ignored
+      }
+    }
+  });
+
+  // Secure message handoff listener
+  window.addEventListener('message', (event) => {
+    if (!frontendUrl) return;
+    try {
+      const trustedOrigin = new URL(frontendUrl).origin;
+      if (event.origin !== trustedOrigin) {
+        return;
       }
     } catch (e) {
-      // Ignored
-    }
-  }
-});
-
-// Secure message handoff listener
-window.addEventListener('message', (event) => {
-  if (!frontendUrl) return;
-  try {
-    const trustedOrigin = new URL(frontendUrl).origin;
-    if (event.origin !== trustedOrigin) {
       return;
     }
-  } catch (e) {
-    return;
-  }
 
-  if (event.source !== window) return;
+    if (event.source !== window) return;
 
-  const data = event.data;
-  if (data && data.type === 'DEKHA_KYA_HANDOFF') {
-    const token = data.token;
-    if (token && /^[0-9a-fA-F]{64}$/.test(token)) {
-      chrome.runtime.sendMessage({ type: 'SAVE_HANDOFF_TOKEN', token });
+    const data = event.data;
+    if (!data) return;
+
+    if (data.type === 'DEKHA_KYA_HANDOFF') {
+      const token = data.token;
+      if (token && /^[0-9a-fA-F]{64}$/.test(token)) {
+        chrome.runtime.sendMessage({ type: 'SAVE_HANDOFF_TOKEN', token });
+      }
+    } else if (data.type === 'DEKHA_KYA_PING_EXTENSION') {
+      window.postMessage({ type: 'DEKHA_KYA_EXTENSION_READY' }, window.location.origin);
     }
-  }
-});
+  });
 
 
 // Keep track of active observers to prevent duplicates
@@ -863,6 +868,9 @@ function injectToolbarIcon() {
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg.type === 'NEW_ACTIVITY_LOGGED') {
       badge.style.display = 'block'; // Show red dot indicator
+    } else if (msg.type === 'REQUEST_NEW_HANDOFF') {
+      console.log('[CONTENT] Extension requested new handoff. Forwarding to dashboard...');
+      window.postMessage({ type: 'DEKHA_KYA_REQUEST_HANDOFF' }, window.location.origin);
     }
   });
 }
@@ -895,19 +903,19 @@ function fetchToolbarActivities(containerEl: HTMLElement) {
         item.addEventListener('click', () => {
           window.open(`${frontendUrl}/emails?threadId=${event.threadId}`, '_blank');
         });
-
+ 
         // Fix field name mapping to prevent NaN
         const timeStr = getActivityRelativeTime(event.timestamp);
-
+ 
         item.innerHTML = `
           <div style="color:#10b981;flex-shrink:0;margin-top:2px;">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/>
-              <circle cx="12" cy="12" r="3"/>
+               <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/>
+               <circle cx="12" cy="12" r="3"/>
             </svg>
           </div>
           <div>
-            <div style="color:#f4f4f5;"><strong>${event.recipientEmail}</strong> opened your email</div>
+            <div style="color:#f4f4f5;">Detected email activity from <strong>${event.recipientEmail}</strong></div>
             <div style="color:#a1a1aa;font-size:11px;margin-top:1px;">${event.subject}</div>
             <div style="color:#71717a;font-size:10px;margin-top:2px;">${timeStr}</div>
           </div>
