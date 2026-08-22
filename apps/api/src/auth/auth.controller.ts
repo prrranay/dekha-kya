@@ -52,7 +52,7 @@ export class AuthController {
     res.cookie('oauth_state', state, {
       httpOnly: true,
       secure: isProd,
-      sameSite: 'lax',
+      sameSite: isProd ? 'none' : 'lax',
       maxAge: 10 * 60 * 1000, // 10 minutes
     });
 
@@ -87,7 +87,7 @@ export class AuthController {
     res.clearCookie('oauth_state', {
       httpOnly: true,
       secure: isProd,
-      sameSite: 'lax',
+      sameSite: isProd ? 'none' : 'lax',
     });
 
     if (!state || !savedState || state !== savedState) {
@@ -195,7 +195,7 @@ export class AuthController {
       res.cookie('session', sessionToken, {
         httpOnly: true,
         secure: isProd,
-        sameSite: 'lax',
+        sameSite: isProd ? 'none' : 'lax',
         maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
       });
 
@@ -306,7 +306,7 @@ export class AuthController {
     res.clearCookie('session', {
       httpOnly: true,
       secure: isProd,
-      sameSite: 'lax',
+      sameSite: isProd ? 'none' : 'lax',
     });
 
     console.log('[AUTH] User logged out, session cookie cleared.');

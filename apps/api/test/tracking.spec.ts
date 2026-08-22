@@ -40,6 +40,12 @@ describe('Gmail Email Tracker E2E & Integration Tests', () => {
       create: jest.fn().mockImplementation((args) =>
         Promise.resolve({ id: 'mock-thread-uuid', gmailThreadId: args.data.gmailThreadId })
       ),
+      update: jest.fn().mockImplementation((args) =>
+        Promise.resolve({ id: args.where.id, gmailThreadId: args.data.gmailThreadId })
+      ),
+      delete: jest.fn().mockImplementation((args) =>
+        Promise.resolve({ id: args.where.id })
+      ),
     },
     trackedMessage: {
       findUnique: jest.fn().mockImplementation((args) => {

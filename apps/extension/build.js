@@ -39,9 +39,10 @@ if (fs.existsSync(manifestPath)) {
   const frontendUrlObj = new URL(frontendUrl);
   const frontendHostPermission = `${frontendUrlObj.protocol}//${frontendUrlObj.host}/*`;
 
-  // Update host_permissions - only grant mail.google.com and API host permissions
+  // Update host_permissions - grant mail.google.com, frontend URL, and API host permissions
   manifest.host_permissions = [
     "https://mail.google.com/*",
+    frontendHostPermission,
     apiHostPermission
   ];
 
@@ -60,7 +61,7 @@ if (fs.existsSync(manifestPath)) {
   ];
 
   // Build-time validation: fail if required permissions are missing
-  const expectedHostPerms = ["https://mail.google.com/*", apiHostPermission];
+  const expectedHostPerms = ["https://mail.google.com/*", frontendHostPermission, apiHostPermission];
   for (const hp of expectedHostPerms) {
     if (!manifest.host_permissions.includes(hp)) {
       console.error(`[BUILD_ERROR] Missing expected host permission: ${hp}`);

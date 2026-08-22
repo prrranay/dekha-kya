@@ -49,7 +49,7 @@ export default function DashboardPage() {
       return res.json();
     },
     staleTime: 2 * 60 * 1000, // 2 minutes
-    refetchInterval: 10000,
+    refetchInterval: false,
   });
 
   // Separate API reachability check
