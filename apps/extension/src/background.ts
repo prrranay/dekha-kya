@@ -1,4 +1,4 @@
-import { API_BASE_URL, FRONTEND_URL } from './config';
+import { API_BASE_URL, FRONTEND_URL } from './config.js';
 
 console.log('Dekha Kya? Tracker Service Worker Active.');
 
@@ -94,7 +94,7 @@ async function fetchWithAuth(url: string, options: RequestInit = {}, retryCount 
       console.error('[BACKGROUND] Re-authentication failed after 401 retry.');
       chrome.notifications.create(`auth-fail-${Date.now()}`, {
         type: 'basic',
-        iconUrl: 'logo.png',
+        iconUrl: chrome.runtime.getURL('logo.png'),
         title: 'Connection Required',
         message: 'Dekha Kya? extension session expired. Please open the dashboard to reconnect.',
         priority: 2
@@ -142,6 +142,13 @@ chrome.runtime.onMessage.addListener(
             tokenExpiry: data.expiresAt,
           }, () => {
             console.log('[BACKGROUND] Extension token successfully stored.');
+            chrome.tabs.query({}, (tabs) => {
+              tabs.forEach((tab) => {
+                if (tab.id) {
+                  chrome.tabs.sendMessage(tab.id, { type: 'AUTH_STATE_CHANGED' }).catch(() => {});
+                }
+              });
+            });
             sendResponse({ success: true });
           });
         })
@@ -267,7 +274,7 @@ function pollLatestActivity() {
             
             chrome.notifications.create(`open-${Date.now()}`, {
               type: 'basic',
-              iconUrl: 'logo.png',
+              iconUrl: chrome.runtime.getURL('logo.png'),
               title: latestEvent.subject || 'Detected Open',
               message: `Detected email activity from ${latestEvent.recipientEmail}`,
               priority: 2

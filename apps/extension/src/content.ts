@@ -35,6 +35,32 @@ function initializeExtension() {
     console.log('[DEKHA_KYA] Initializing Gmail integration...');
     // Start observing page for compose window elements
     initComposeObserver();
+    // Sweep periodically to ensure any re-rendered compose toolbars are populated
+    setInterval(() => {
+      document.querySelectorAll('.M9, .aoI').forEach((box) => {
+        const toolbar = box.querySelector('.gU.Up, .btC');
+        if (toolbar && !toolbar.querySelector('.gmail-tracker-toggle-container')) {
+          processedComposeWindows.delete(box);
+          setupComposeTracking(box);
+        }
+      });
+    }, 1000);
+
+    // Listen for authentication changes to update compose checkbox status instantly
+    chrome.runtime.onMessage.addListener((msg) => {
+      if (msg.type === 'AUTH_STATE_CHANGED') {
+        console.log('[CONTENT] Authentication state changed. Refreshing active compose windows...');
+        document.querySelectorAll('.M9, .aoI').forEach((box) => {
+          const existing = box.querySelector('.gmail-tracker-toggle-container');
+          if (existing) {
+            existing.remove();
+          }
+          processedComposeWindows.delete(box);
+          setupComposeTracking(box);
+        });
+      }
+    });
+
     // Inject our brand icon into the Gmail top-right header toolbar
     injectToolbarIcon();
   } else if (isDekhaKyaFrontend(frontendUrl)) {
@@ -174,7 +200,9 @@ function setupComposeTracking(composeBox: Element) {
     console.log('[GMAIL_TRACKER] Active Gmail page email:', activeGmailEmail);
     console.log('[GMAIL_TRACKER] Connected extension email:', connectedEmail);
 
-    if (connectedEmail && activeGmailEmail && activeGmailEmail.toLowerCase() === connectedEmail.toLowerCase()) {
+    const isMatching = !activeGmailEmail || !connectedEmail || activeGmailEmail.toLowerCase() === connectedEmail.toLowerCase();
+
+    if (connectedEmail && isMatching) {
       statusSpan.innerHTML = `(<span style="color:#16a34a;font-weight:600;">✓</span> Connected: ${connectedEmail})`;
       checkbox.disabled = false;
       
@@ -184,6 +212,19 @@ function setupComposeTracking(composeBox: Element) {
       });
 
       container.style.display = 'inline-flex';
+    } else if (!connectedEmail) {
+      statusSpan.innerHTML = `(<a href="#" class="gmail-tracker-connect-link" style="color:#1a73e8;text-decoration:underline;font-weight:600;cursor:pointer;">Connect Gmail</a>)`;
+      checkbox.disabled = true;
+      checkbox.checked = false;
+      container.style.display = 'inline-flex';
+
+      const connectLink = statusSpan.querySelector('.gmail-tracker-connect-link');
+      if (connectLink) {
+        connectLink.addEventListener('click', (e) => {
+          e.preventDefault();
+          chrome.runtime.sendMessage({ type: 'OPEN_OAUTH_TAB' });
+        });
+      }
     } else {
       // Hide the tracking option completely if they don't match or not authenticated
       checkbox.checked = false;
@@ -191,6 +232,12 @@ function setupComposeTracking(composeBox: Element) {
       container.style.display = 'none';
     }
   });
+
+  // Only hook event listeners ONCE per composeBox
+  if (composeBox.getAttribute('data-gmail-tracker-hooked') === 'true') {
+    return;
+  }
+  composeBox.setAttribute('data-gmail-tracker-hooked', 'true');
 
   // Intercept Send button — block Gmail's native send when tracking is active
   const sendButton = composeBox.querySelector('.T-I.J-J5-Ji.aoO.v7.T-I-atl.L3');

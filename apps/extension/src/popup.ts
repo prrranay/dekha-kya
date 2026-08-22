@@ -1,4 +1,4 @@
-import { FRONTEND_URL } from './config';
+import { FRONTEND_URL } from './config.js';
 
 interface RecentEvent {
   subject: string;

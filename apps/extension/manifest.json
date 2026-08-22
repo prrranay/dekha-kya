@@ -11,8 +11,8 @@
   ],
   "host_permissions": [
     "https://mail.google.com/*",
-    "http://localhost:3000/*",
-    "http://localhost:4000/*"
+    "https://dekha-kya.vercel.app/*",
+    "https://dekha-kya.up.railway.app/*"
   ],
   "action": {
     "default_popup": "popup.html",
@@ -29,7 +29,7 @@
     {
       "matches": [
         "https://mail.google.com/*",
-        "http://localhost:3000/*"
+        "https://dekha-kya.vercel.app/*"
       ],
       "js": [
         "dist/content.js"
