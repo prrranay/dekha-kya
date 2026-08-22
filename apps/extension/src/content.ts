@@ -6,18 +6,45 @@ interface RegisterMessageRecipient {
 
 console.log('Dekha Kya? Gmail tracker content script initialized.');
 
-// Detect extension on dashboard pages and set DOM indicator
-if (window.location.hostname === 'localhost' || window.location.hostname.includes('vercel.app')) {
-  document.documentElement.setAttribute('data-dekha-kya-extension', 'true');
-  console.log('Dekha Kya? Extension detected on dashboard page.');
-}
-
-let frontendUrl = 'https://dekha-kya.vercel.app'; // Fallback default
+let frontendUrl = 'http://localhost:3000'; // Fallback default
 chrome.runtime.sendMessage({ type: 'GET_FRONTEND_URL' }, (res) => {
   if (res && res.success && res.frontendUrl) {
     frontendUrl = res.frontendUrl;
+    try {
+      const urlObj = new URL(frontendUrl);
+      if (window.location.host === urlObj.host) {
+        document.documentElement.setAttribute('data-dekha-kya-extension', 'true');
+        console.log('Dekha Kya? Extension detected on dashboard page.');
+      }
+    } catch (e) {
+      // Ignored
+    }
   }
 });
+
+// Secure message handoff listener
+window.addEventListener('message', (event) => {
+  if (!frontendUrl) return;
+  try {
+    const trustedOrigin = new URL(frontendUrl).origin;
+    if (event.origin !== trustedOrigin) {
+      return;
+    }
+  } catch (e) {
+    return;
+  }
+
+  if (event.source !== window) return;
+
+  const data = event.data;
+  if (data && data.type === 'DEKHA_KYA_HANDOFF') {
+    const token = data.token;
+    if (token && /^[0-9a-fA-F]{64}$/.test(token)) {
+      chrome.runtime.sendMessage({ type: 'SAVE_HANDOFF_TOKEN', token });
+    }
+  }
+});
+
 
 // Keep track of active observers to prevent duplicates
 const processedComposeWindows = new Set<Element>();
@@ -269,9 +296,7 @@ async function handleTrackedSend(composeBox: Element, senderEmail: string, check
   const plainTextBody = bodyEditor ? bodyEditor.innerText : '';
 
   // 3. Gather thread details (Check if we are in reply mode)
-  let gmailThreadId = getThreadIdFromUrl();
-
-  const cleanFromEmail = senderEmail;
+  let gmailThreadId = resolveGmailThreadId(composeBox);
 
   const sendPayload = {
     gmailThreadId,
@@ -279,7 +304,6 @@ async function handleTrackedSend(composeBox: Element, senderEmail: string, check
     htmlBody,
     plainTextBody,
     recipients,
-    fromEmail: cleanFromEmail,
   };
 
   console.log('Dispatching send request to service worker payload:', sendPayload);
@@ -546,16 +570,39 @@ function extractEmailsFromString(text: string): string[] {
   return matches ? matches.map((m) => m.toLowerCase().trim()) : [];
 }
 
-function getThreadIdFromUrl(): string | undefined {
-  const hash = window.location.hash;
-  if (!hash) return undefined;
-  
-  // Gmail URLs look like: #inbox/18a1bf18db82049d, #sent/18a1bf18db82049d, #search/query/18a1bf18db82049d, #label/name/18a1bf18db82049d, etc.
-  const segments = hash.split('/');
-  const lastSegment = segments[segments.length - 1];
-  if (lastSegment && /^[a-f0-9]{16}$/.test(lastSegment)) {
-    return lastSegment;
+function resolveGmailThreadId(composeBox: Element): string | undefined {
+  // 1. Try to find closest thread container in conversation view
+  const closestThreadContainer = composeBox.closest('[data-thread-id]');
+  if (closestThreadContainer) {
+    const tid = closestThreadContainer.getAttribute('data-thread-id');
+    if (tid && /^[a-f0-9]{16}$/.test(tid)) {
+      return tid;
+    }
   }
+
+  // 2. Try looking for data-thread-id in the active view
+  const mainContent = document.querySelector('[role="main"]');
+  if (mainContent) {
+    const activeThreadEl = mainContent.querySelector('[data-thread-id]');
+    if (activeThreadEl) {
+      const tid = activeThreadEl.getAttribute('data-thread-id');
+      if (tid && /^[a-f0-9]{16}$/.test(tid)) {
+        return tid;
+      }
+    }
+  }
+
+  // 3. Fallback to URL hash segments
+  const hash = window.location.hash;
+  if (hash) {
+    const segments = hash.split('/');
+    for (const segment of segments) {
+      if (/^[a-f0-9]{16}$/.test(segment)) {
+        return segment;
+      }
+    }
+  }
+
   return undefined;
 }
 

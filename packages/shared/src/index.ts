@@ -4,6 +4,10 @@ export type TrackingEventType = 'OPEN' | 'CLICK';
 
 export type OpenCategory = 'RECIPIENT_OPEN' | 'SELF_OPEN' | 'UNKNOWN_OPEN';
 
+export type TrackingEventSource = 'GOOGLE_PROXY' | 'DIRECT' | 'UNKNOWN';
+
+export type TrackingEventClassification = 'DETECTED_OPEN' | 'SELF_OPEN' | 'UNKNOWN_OPEN';
+
 export type MessageDirection = 'INBOUND' | 'OUTBOUND';
 
 export interface RegisterMessageRecipient {
@@ -75,6 +79,7 @@ export interface TrackedRecipientDto {
   displayName: string | null;
   recipientType: RecipientType;
   trackingToken: string;
+  gmailMessageId: string | null;
   firstOpenedAt: string | null;
   lastOpenedAt: string | null;
   openCount: number;
@@ -87,9 +92,12 @@ export interface TrackingEventDto {
   trackedRecipientId: string;
   type: TrackingEventType;
   category: OpenCategory;
+  source: TrackingEventSource;
+  classification: TrackingEventClassification;
   timestamp: string;
   userAgent: string | null;
   ipHash: string | null;
   referer: string | null;
   createdAt: string;
 }
+

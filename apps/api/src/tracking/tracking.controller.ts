@@ -56,18 +56,28 @@ export class TrackingController {
     const referer = req.headers['referer'];
     const isSelf = senderQuery === 'true';
 
-    // 2. Extract sessionUserId from cookie to evaluate SELF_OPEN heuristic
+    // 2. Extract sessionUserId from cookie or authorization/x-session-token header to evaluate SELF_OPEN heuristic
     let sessionUserId: string | undefined = undefined;
-    const sessionToken = req.cookies?.session || req.cookies?.jwt;
+    let sessionToken = req.cookies?.session || req.cookies?.jwt;
+    if (!sessionToken) {
+      const authHeader = req.headers['authorization'] as string || req.headers['x-session-token'] as string;
+      if (authHeader) {
+        sessionToken = authHeader.startsWith('Bearer ') ? authHeader.substring(7) : authHeader;
+      }
+    }
+
     if (sessionToken) {
       try {
-        const secret = process.env.SESSION_SECRET || 'dev-session-secret-key-123456789';
-        const decoded = jwt.verify(sessionToken, secret) as { userId: string };
-        sessionUserId = decoded.userId;
+        const secret = process.env.SESSION_SECRET;
+        if (secret) {
+          const decoded = jwt.verify(sessionToken, secret) as { userId: string };
+          sessionUserId = decoded.userId;
+        }
       } catch (e) {
         // Ignore invalid session token in tracking pixel request
       }
     }
+
 
     // 3. Await database operation to ensure pixel tracking reliability.
     // Suppress exceptions to avoid leaking token status or breaking image rendering.

@@ -1,4 +1,4 @@
-import { Controller, Get, Query, Res, Req, UseGuards, UnauthorizedException } from '@nestjs/common';
+import { Controller, Get, Query, Res, Req, UseGuards, UnauthorizedException, Post, Body } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { UserDto } from '@gmail-tracker/shared';
 import { Response, Request } from 'express';
@@ -10,6 +10,15 @@ import { GmailService } from '../gmail/gmail.service';
 import { AuthGuard } from './auth.guard';
 import { CurrentUser } from './current-user.decorator';
 
+export class ExchangeTokenDto {
+  handoffToken!: string;
+}
+
+export class ExtensionHeartbeatDto {
+  browser?: string;
+  version?: string;
+}
+
 @ApiTags('auth')
 @Controller('auth')
 export class AuthController {
@@ -18,76 +27,11 @@ export class AuthController {
     private readonly gmailService: GmailService
   ) {}
 
-  @Get('me')
-  @UseGuards(AuthGuard)
-  @ApiOperation({ summary: 'Retrieve the active Google OAuth user session profile' })
-  @ApiResponse({
-    status: 200,
-    description: 'User profile retrieved successfully.',
-  })
-  async getMe(@CurrentUser() currentUser: { id: string }): Promise<UserDto & { gmailConnected: boolean }> {
-    const user = await this.prisma.user.findUnique({
-      where: { id: currentUser.id },
-      include: {
-        accounts: true,
-      },
-    });
-
-    if (!user) {
-      throw new UnauthorizedException('Session user not found in database');
-    }
-
-    return {
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      picture: user.picture || null,
-      createdAt: user.createdAt.toISOString(),
-      updatedAt: user.updatedAt.toISOString(),
-      gmailConnected: user.accounts.length > 0,
-    };
-  }
-
-  @Get('status')
-  @ApiOperation({ summary: 'Check if the user is authenticated from the Chrome extension context' })
-  async getStatus(@Req() req: Request) {
-    let token = req.cookies?.session || req.cookies?.jwt;
-
-    if (!token) {
-      const authHeader = req.headers['authorization'];
-      if (authHeader && authHeader.startsWith('Bearer ')) {
-        token = authHeader.substring(7);
-      }
-    }
-
-    if (!token) {
-      return { authenticated: false };
-    }
-
-    try {
-      const secret = process.env.SESSION_SECRET || 'dev-session-secret-key-123456789';
-      const decoded = jwt.verify(token, secret) as { userId: string };
-      const user = await this.prisma.user.findUnique({
-        where: { id: decoded.userId },
-        include: { accounts: true },
-      });
-
-      if (!user) {
-        return { authenticated: false };
-      }
-
-      return {
-        authenticated: true,
-        email: user.email,
-      };
-    } catch (error) {
-      return { authenticated: false };
-    }
-  }
-
-  @Get('google')
-  @ApiOperation({ summary: 'Redirect the browser to Google OAuth 2.0 Login Screen' })
-  async redirectToGoogle(@Res() res: Response) {
+  /**
+   * Generates a secure random OAuth state, stores it in an HTTP-only cookie,
+   * and builds the Google consent authorization URL.
+   */
+  createGoogleAuthorizationUrl(res: Response): string {
     const oAuth2Client = new google.auth.OAuth2(
       process.env.GOOGLE_CLIENT_ID,
       process.env.GOOGLE_CLIENT_SECRET,
@@ -102,7 +46,6 @@ export class AuthController {
       'https://www.googleapis.com/auth/userinfo.profile',
     ];
 
-    // Generate cryptographically secure random state
     const state = crypto.randomBytes(32).toString('hex');
     const isProd = process.env.NODE_ENV === 'production';
     
@@ -114,13 +57,18 @@ export class AuthController {
       maxAge: 10 * 60 * 1000, // 10 minutes
     });
 
-    const url = oAuth2Client.generateAuthUrl({
+    return oAuth2Client.generateAuthUrl({
       access_type: 'offline', // Demands refresh token
       prompt: 'consent', // Enforces consent to ensure refresh token is returned
       scope: scopes,
       state: state,
     });
+  }
 
+  @Get('google')
+  @ApiOperation({ summary: 'Redirect the browser to Google OAuth 2.0 Login Screen' })
+  async redirectToGoogle(@Res() res: Response) {
+    const url = this.createGoogleAuthorizationUrl(res);
     return res.redirect(url);
   }
 
@@ -214,22 +162,7 @@ export class AuthController {
       // we must force consent so Google returns it.
       if (!encryptedRefresh) {
         console.warn(`[OAUTH_WARNING] Refresh token missing and not found in database for user ${email}. Redirecting to force consent.`);
-        const oAuth2ClientForce = new google.auth.OAuth2(
-          process.env.GOOGLE_CLIENT_ID,
-          process.env.GOOGLE_CLIENT_SECRET,
-          process.env.GOOGLE_CALLBACK_URL
-        );
-        const url = oAuth2ClientForce.generateAuthUrl({
-          access_type: 'offline',
-          prompt: 'consent',
-          scope: [
-            'https://www.googleapis.com/auth/gmail.send',
-            'https://www.googleapis.com/auth/gmail.metadata',
-            'openid',
-            'https://www.googleapis.com/auth/userinfo.email',
-            'https://www.googleapis.com/auth/userinfo.profile',
-          ],
-        });
+        const url = this.createGoogleAuthorizationUrl(res);
         return res.redirect(url);
       }
 
@@ -253,7 +186,10 @@ export class AuthController {
       });
 
       // 4. Create signed JWT session
-      const secret = process.env.SESSION_SECRET || 'dev-session-secret-key-123456789';
+      const secret = process.env.SESSION_SECRET;
+      if (!secret) {
+        throw new Error('SESSION_SECRET environment variable is missing.');
+      }
       const sessionToken = jwt.sign({ userId: user.id }, secret, { expiresIn: '7d' });
 
       // 5. Save in httpOnly cookie
@@ -274,6 +210,93 @@ export class AuthController {
       return res.redirect(`${frontendUrl}/settings?connected=false`);
     }
   }
+
+  @Get('me')
+  @UseGuards(AuthGuard)
+  @ApiOperation({ summary: 'Retrieve the active Google OAuth user session profile' })
+  @ApiResponse({
+    status: 200,
+    description: 'User profile retrieved successfully.',
+  })
+  async getMe(@CurrentUser() currentUser: { id: string }): Promise<UserDto & { gmailConnected: boolean }> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: currentUser.id },
+      include: {
+        accounts: true,
+      },
+    });
+
+    if (!user) {
+      throw new UnauthorizedException('Session user not found in database');
+    }
+
+    return {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      picture: user.picture || null,
+      createdAt: user.createdAt.toISOString(),
+      updatedAt: user.updatedAt.toISOString(),
+      gmailConnected: user.accounts.length > 0,
+    };
+  }
+
+  @Get('status')
+  @ApiOperation({ summary: 'Check if the user is authenticated from the Chrome extension context' })
+  async getStatus(@Req() req: Request) {
+    let token = req.cookies?.session || req.cookies?.jwt;
+
+    if (!token) {
+      const authHeader = req.headers['authorization'];
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        token = authHeader.substring(7);
+      }
+    }
+
+    if (!token) {
+      return { authenticated: false };
+    }
+
+    try {
+      const secret = process.env.SESSION_SECRET;
+      if (!secret) {
+        throw new Error('SESSION_SECRET is required but not configured.');
+      }
+
+      const decoded = jwt.verify(token, secret) as { userId?: string; sub?: string; type?: string; jti?: string };
+      const userId = decoded.type === 'extension' ? decoded.sub : decoded.userId;
+
+      if (!userId) {
+        return { authenticated: false };
+      }
+
+      if (decoded.type === 'extension' && decoded.jti) {
+        const session = await this.prisma.extensionSession.findUnique({
+          where: { jti: decoded.jti },
+        });
+        if (!session || session.revokedAt) {
+          return { authenticated: false };
+        }
+      }
+
+      const user = await this.prisma.user.findUnique({
+        where: { id: userId },
+        include: { accounts: true },
+      });
+
+      if (!user) {
+        return { authenticated: false };
+      }
+
+      return {
+        authenticated: true,
+        email: user.email,
+      };
+    } catch (error) {
+      return { authenticated: false };
+    }
+  }
+
   @Get('logout')
   @ApiOperation({ summary: 'Clear the session cookie and log out the user' })
   async logout(@Res() res: Response) {
@@ -291,4 +314,126 @@ export class AuthController {
 
     return res.redirect(frontendUrl);
   }
+
+  @Post('extension/handoff')
+  @UseGuards(AuthGuard)
+  @ApiOperation({ summary: 'Generate a secure one-time extension handoff token' })
+  async generateHandoff(@CurrentUser() currentUser: { id: string }) {
+    const rawToken = crypto.randomBytes(32).toString('hex');
+    const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+    
+    // Hash is stored in database with a 60-second expiration window
+    await this.prisma.handoffToken.create({
+      data: {
+        tokenHash,
+        userId: currentUser.id,
+        expiresAt: new Date(Date.now() + 60 * 1000), // 60 seconds
+      },
+    });
+
+    const tokenHashLog = tokenHash.slice(0, 12);
+    console.log(`[HANDOFF_GENERATED] HandoffToken hash: ${tokenHashLog} for user ${currentUser.id}`);
+
+    return { rawToken };
+  }
+
+  @Post('extension/token')
+  @ApiOperation({ summary: 'Exchange handoff token for a short-lived extension access token' })
+  async exchangeToken(@Body() dto: ExchangeTokenDto) {
+    const { handoffToken } = dto;
+    if (!handoffToken || typeof handoffToken !== 'string') {
+      throw new UnauthorizedException('Invalid handoff token format');
+    }
+
+    const tokenHash = crypto.createHash('sha256').update(handoffToken).digest('hex');
+    const tokenHashLog = tokenHash.slice(0, 12);
+    const now = new Date();
+
+    // Perform atomic transaction consumption
+    const updateResult = await this.prisma.handoffToken.updateMany({
+      where: {
+        tokenHash,
+        consumedAt: null,
+        expiresAt: { gt: now },
+      },
+      data: {
+        consumedAt: now,
+      },
+    });
+
+    if (updateResult.count !== 1) {
+      console.warn(`[HANDOFF_EXCHANGE_FAILURE] Token ${tokenHashLog} not found, expired, or already consumed`);
+      throw new UnauthorizedException('Handoff token is invalid, expired, or already consumed');
+    }
+
+    const handoff = await this.prisma.handoffToken.findUnique({
+      where: { tokenHash },
+    });
+
+    if (!handoff) {
+      throw new UnauthorizedException('Handoff token lookup failed');
+    }
+
+    const secret = process.env.SESSION_SECRET;
+    if (!secret) {
+      throw new Error('SESSION_SECRET is required but not configured.');
+    }
+
+    const jti = crypto.randomUUID();
+    const expiresInSeconds = 15 * 60; // 15 minutes
+    const accessToken = jwt.sign(
+      {
+        sub: handoff.userId,
+        type: 'extension',
+      },
+      secret,
+      {
+        expiresIn: expiresInSeconds,
+        jwtid: jti,
+      }
+    );
+
+    // Track extension session for revocation checking
+    await this.prisma.extensionSession.create({
+      data: {
+        jti,
+        userId: handoff.userId,
+        expiresAt: new Date(Date.now() + expiresInSeconds * 1000),
+      },
+    });
+
+    console.log(`[HANDOFF_EXCHANGE_SUCCESS] User ${handoff.userId} session ${jti} created`);
+
+    return {
+      accessToken,
+      expiresAt: Date.now() + expiresInSeconds * 1000,
+    };
+  }
+
+  @Post('extension/heartbeat')
+  @UseGuards(AuthGuard)
+  @ApiOperation({ summary: 'Register Chrome extension activity heartbeat' })
+  async heartbeat(
+    @CurrentUser() currentUser: { id: string; jti?: string },
+    @Body() dto: ExtensionHeartbeatDto
+  ) {
+    if (!currentUser.jti) {
+      throw new UnauthorizedException('Heartbeat requires a valid extension session');
+    }
+
+    await this.prisma.extensionSession.updateMany({
+      where: {
+        jti: currentUser.jti,
+        revokedAt: null,
+      },
+      data: {
+        lastSeenAt: new Date(),
+        browser: dto.browser || null,
+        version: dto.version || null,
+      },
+    });
+
+    return { success: true };
+  }
 }
+

@@ -1,8 +1,10 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import request from 'supertest';
+import cookieParser from 'cookie-parser';
 import { AppModule } from '../src/app.module';
 import { PrismaService } from '../src/prisma/prisma.service';
+import { TrackingService } from '../src/tracking/tracking.service';
 import { GmailService } from '../src/gmail/gmail.service';
 import { AuthGuard } from '../src/auth/auth.guard';
 import { ExecutionContext } from '@nestjs/common';
@@ -81,10 +83,29 @@ describe('Gmail Email Tracker E2E & Integration Tests', () => {
         gmailThreadId: threadId || 'mock-thread-id-456',
       });
     }),
+    getThreadMetadata: jest.fn().mockResolvedValue({
+      messages: [
+        {
+          id: 'mock-msg-id-123',
+          internalDate: '1620000000000',
+          payload: {
+            headers: [
+              { name: 'Message-ID', value: '<mock-msg-id-123@mail.gmail.com>' },
+              { name: 'References', value: '<prev-ref-id@mail.gmail.com>' },
+              { name: 'Subject', value: 'Follow-up' },
+            ],
+          },
+        },
+      ],
+    }),
+    getLatestThreadMessage: jest.fn().mockImplementation((thread) => {
+      return thread.messages[0];
+    }),
     resolveReplyHeaders: jest.fn().mockResolvedValue({ inReplyTo: undefined, references: undefined }),
   };
 
   beforeAll(async () => {
+    process.env.SESSION_SECRET = 'test-session-secret-key-123456789';
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
     })
@@ -103,6 +124,7 @@ describe('Gmail Email Tracker E2E & Integration Tests', () => {
       .compile();
 
     app = moduleFixture.createNestApplication();
+    app.use(cookieParser());
     app.useGlobalPipes(new ValidationPipe({ transform: true }));
     await app.init();
   });
@@ -121,7 +143,6 @@ describe('Gmail Email Tracker E2E & Integration Tests', () => {
       subject: 'Hello R1',
       htmlBody: '<p>Body text</p>',
       recipients: [{ email: 'rahul@gmail.com', recipientType: 'TO' }],
-      fromEmail: 'sender@gmail.com',
     };
 
     const res = await request(app.getHttpServer())
@@ -144,7 +165,6 @@ describe('Gmail Email Tracker E2E & Integration Tests', () => {
         { email: 'rahul@gmail.com', recipientType: 'TO' },
         { email: 'kiran@gmail.com', recipientType: 'CC' },
       ],
-      fromEmail: 'sender@gmail.com',
     };
 
 
@@ -169,7 +189,6 @@ describe('Gmail Email Tracker E2E & Integration Tests', () => {
         { email: 'kiran@gmail.com', recipientType: 'CC' },
         { email: 'anil@gmail.com', recipientType: 'CC' },
       ],
-      fromEmail: 'sender@gmail.com',
     };
 
     const res = await request(app.getHttpServer())
@@ -188,7 +207,6 @@ describe('Gmail Email Tracker E2E & Integration Tests', () => {
       subject: 'Confidential Notice',
       htmlBody: '<p>Top secret</p>',
       recipients: [{ email: 'hidden@gmail.com', recipientType: 'BCC' }],
-      fromEmail: 'sender@gmail.com',
     };
 
     const res = await request(app.getHttpServer())
@@ -206,14 +224,12 @@ describe('Gmail Email Tracker E2E & Integration Tests', () => {
       subject: 'Mail 1',
       htmlBody: '<p>Content 1</p>',
       recipients: [{ email: 'rahul@gmail.com', recipientType: 'TO' }],
-      fromEmail: 'sender@gmail.com',
     };
 
     const payload2 = {
       subject: 'Mail 2',
       htmlBody: '<p>Content 2</p>',
       recipients: [{ email: 'rahul@gmail.com', recipientType: 'TO' }],
-      fromEmail: 'sender@gmail.com',
     };
 
     const res1 = await request(app.getHttpServer()).post('/gmail/send').send(payload1).expect(201);
@@ -229,7 +245,6 @@ describe('Gmail Email Tracker E2E & Integration Tests', () => {
       subject: 'Follow-up',
       htmlBody: '<p>Still waiting</p>',
       recipients: [{ email: 'rahul@gmail.com', recipientType: 'TO' }],
-      fromEmail: 'sender@gmail.com',
     };
 
     mockPrismaService.trackedThread.findUnique.mockResolvedValueOnce({
@@ -251,7 +266,6 @@ describe('Gmail Email Tracker E2E & Integration Tests', () => {
       subject: 'Brand New Topic',
       htmlBody: '<p>Init text</p>',
       recipients: [{ email: 'rahul@gmail.com', recipientType: 'TO' }],
-      fromEmail: 'sender@gmail.com',
     };
 
     mockPrismaService.trackedThread.findUnique.mockResolvedValueOnce(null);
@@ -300,8 +314,8 @@ describe('Gmail Email Tracker E2E & Integration Tests', () => {
     expect(mockPrismaService.trackingEvent.create).toHaveBeenCalledTimes(1);
   });
 
-  // 10. Self-open
-  it('10. Should flag category as SELF_OPEN when sender=true query is provided', async () => {
+  // 10. Self-open unauthenticated
+  it('10. Should flag category as UNKNOWN_OPEN when sender=true query is provided without session', async () => {
     const token = 'abcdefabcdefabcdefabcdefabcdef12';
 
     mockPrismaService.trackedRecipient.findUnique.mockResolvedValueOnce({
@@ -322,11 +336,70 @@ describe('Gmail Email Tracker E2E & Integration Tests', () => {
     expect(mockPrismaService.trackingEvent.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
-          category: 'SELF_OPEN',
+          category: 'UNKNOWN_OPEN',
+          classification: 'UNKNOWN_OPEN',
         }),
       })
     );
   });
+
+  // 10b. Self-open authenticated
+  it('10b. Should flag category as SELF_OPEN when request user context matches sender', async () => {
+    const token = 'differenttokenabcdefabcdefabcdef';
+    const trackingService = app.get(TrackingService);
+
+    mockPrismaService.trackedRecipient.findUnique.mockResolvedValueOnce({
+      id: 'recip-123',
+      trackingToken: token,
+      openCount: 0,
+      trackedMessage: {
+        trackedThread: {
+          userId: 'dev-user-id',
+        },
+      },
+    });
+
+    await trackingService.recordOpen(token, { sessionUserId: 'dev-user-id' });
+
+    expect(mockPrismaService.trackingEvent.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          category: 'SELF_OPEN',
+          classification: 'SELF_OPEN',
+        }),
+      })
+    );
+  });
+
+  // 10c. Google proxy open
+  it('10c. Should flag category as RECIPIENT_OPEN and classification as DETECTED_OPEN for Google Proxy', async () => {
+    const token = 'googleproxytokenabcdefabcdefabcd';
+    const trackingService = app.get(TrackingService);
+
+    mockPrismaService.trackedRecipient.findUnique.mockResolvedValueOnce({
+      id: 'recip-123',
+      trackingToken: token,
+      openCount: 0,
+      trackedMessage: {
+        trackedThread: {
+          userId: 'dev-user-id',
+        },
+      },
+    });
+
+    await trackingService.recordOpen(token, { userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36 GoogleImageProxy' });
+
+    expect(mockPrismaService.trackingEvent.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          category: 'RECIPIENT_OPEN',
+          classification: 'DETECTED_OPEN',
+          source: 'GOOGLE_PROXY',
+        }),
+      })
+    );
+  });
+
 
   // 11. Missing HTML body
   it('11. Should fall back to formatting text body as HTML to embed pixel', async () => {
@@ -334,7 +407,6 @@ describe('Gmail Email Tracker E2E & Integration Tests', () => {
       subject: 'Plain Text Send',
       plainTextBody: 'Hello world this is text content',
       recipients: [{ email: 'rahul@gmail.com', recipientType: 'TO' }],
-      fromEmail: 'sender@gmail.com',
       htmlBody: '', // Empty html
     };
 
@@ -356,7 +428,6 @@ describe('Gmail Email Tracker E2E & Integration Tests', () => {
       subject: 'Convert Text',
       plainTextBody: 'Text body',
       recipients: [{ email: 'rahul@gmail.com', recipientType: 'TO' }],
-      fromEmail: 'sender@gmail.com',
       htmlBody: '',
     };
 
@@ -391,7 +462,6 @@ describe('Gmail Email Tracker E2E & Integration Tests', () => {
       subject: 'Broken API Send',
       htmlBody: '<p>Test</p>',
       recipients: [{ email: 'rahul@gmail.com', recipientType: 'TO' }],
-      fromEmail: 'fail-gmail-api@gmail.com',
     };
 
     // Mock gmailAccount query return email to trigger simulated outage

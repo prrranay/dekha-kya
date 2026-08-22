@@ -1,3 +1,5 @@
+import { FRONTEND_URL } from './config';
+
 interface RecentEvent {
   subject: string;
   recipientEmail: string;
@@ -13,13 +15,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // 1. Redirect to Dashboard website
   btnDashboard.addEventListener('click', () => {
-    chrome.tabs.create({ url: 'https://dekha-kya.vercel.app/emails' });
+    chrome.tabs.create({ url: `${FRONTEND_URL}/emails` });
   });
 
   // 2. Manage Tracking Toggle Switch state
   chrome.storage.local.get(['trackingEnabled'], (result) => {
-    // Defaults to true if not defined yet
-    const enabled = result.trackingEnabled !== false;
+    // Defaults to false (OFF)
+    const enabled = result.trackingEnabled === true;
     trackingToggle.checked = enabled;
     statusLabel.innerText = enabled ? 'Tracking enabled' : 'Tracking disabled';
   });
@@ -57,7 +59,7 @@ document.addEventListener('DOMContentLoaded', () => {
               item.style.backgroundColor = 'transparent';
             });
             item.addEventListener('click', () => {
-              chrome.tabs.create({ url: `https://dekha-kya.vercel.app/emails?threadId=${event.threadId}` });
+              chrome.tabs.create({ url: `${FRONTEND_URL}/emails?threadId=${event.threadId}` });
             });
 
             const timeStr = formatRelativeTime(event.timestamp);

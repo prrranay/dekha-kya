@@ -94,6 +94,9 @@ export class TrackingService {
     token: string,
     metadata: { userAgent?: string; ip?: string; referer?: string; isSelf?: boolean; sessionUserId?: string }
   ): Promise<void> {
+    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+    const tokenHashLog = tokenHash.slice(0, 12);
+
     if (this.openRateLimitCache.has(token)) {
       // Ignored due to rate limit threshold (2-second window)
       return;
@@ -116,24 +119,44 @@ export class TrackingService {
     });
 
     if (!recipient) {
-      console.warn(`[INVALID_TRACKING_TOKEN] Token: ${token}`);
+      console.warn(`[INVALID_TRACKING_TOKEN] TokenHash: ${tokenHashLog}`);
       throw new NotFoundException('Invalid tracking token');
     }
 
-    // 2. Determine open category (RECIPIENT_OPEN, SELF_OPEN, UNKNOWN_OPEN)
-    // Classify as SELF_OPEN if the session user matches the thread owner or isSelf query is true.
-    // Classify as UNKNOWN_OPEN if requested via Google Image Proxy or without User-Agent.
-    let category: OpenCategory = 'RECIPIENT_OPEN';
-    const isGoogleProxy = metadata.userAgent && metadata.userAgent.includes('GoogleImageProxy');
-    const belongsToSender = metadata.sessionUserId && recipient.trackedMessage.trackedThread.userId === metadata.sessionUserId;
-
-    if (belongsToSender || metadata.isSelf) {
-      category = 'SELF_OPEN';
-    } else if (isGoogleProxy || !metadata.userAgent) {
-      category = 'UNKNOWN_OPEN';
+    // 2. Determine open telemetry source
+    let source: 'GOOGLE_PROXY' | 'DIRECT' | 'UNKNOWN' = 'UNKNOWN';
+    if (metadata.userAgent && (metadata.userAgent.includes('GoogleImageProxy') || metadata.userAgent.includes('ggpht.com'))) {
+      source = 'GOOGLE_PROXY';
+    } else if (metadata.userAgent) {
+      source = 'DIRECT';
     }
 
-    // 3. Hash the IP address to preserve privacy
+    // 3. Determine classification (DETECTED_OPEN, SELF_OPEN, UNKNOWN_OPEN)
+    // Classify as SELF_OPEN if the session user matches the thread owner (authenticated context).
+    // Do NOT trust metadata.isSelf (?sender=true) without authenticated context.
+    let classification: 'DETECTED_OPEN' | 'SELF_OPEN' | 'UNKNOWN_OPEN' = 'UNKNOWN_OPEN';
+    const belongsToSender = metadata.sessionUserId && recipient.trackedMessage.trackedThread.userId === metadata.sessionUserId;
+
+    if (belongsToSender) {
+      classification = 'SELF_OPEN';
+    } else if (metadata.isSelf) {
+      // ?sender=true query parameter replayed without authenticated context
+      classification = 'UNKNOWN_OPEN';
+    } else if (source === 'GOOGLE_PROXY') {
+      classification = 'DETECTED_OPEN';
+    } else if (source === 'DIRECT') {
+      classification = 'DETECTED_OPEN';
+    }
+
+    // Map classification to backward-compatible category (RECIPIENT_OPEN, SELF_OPEN, UNKNOWN_OPEN)
+    let category: OpenCategory = 'UNKNOWN_OPEN';
+    if (classification === 'SELF_OPEN') {
+      category = 'SELF_OPEN';
+    } else if (classification === 'DETECTED_OPEN') {
+      category = 'RECIPIENT_OPEN';
+    }
+
+    // 4. Hash the IP address to preserve privacy
     let ipHash: string | null = null;
     if (metadata.ip) {
       ipHash = crypto.createHash('sha256').update(metadata.ip).digest('hex');
@@ -141,12 +164,14 @@ export class TrackingService {
 
     const now = new Date();
 
-    // 4. Create tracking event log
+    // 5. Create tracking event log
     await this.prisma.trackingEvent.create({
       data: {
         trackedRecipientId: recipient.id,
         type: 'OPEN',
         category,
+        source,
+        classification,
         timestamp: now,
         userAgent: metadata.userAgent || null,
         ipHash,
@@ -154,10 +179,10 @@ export class TrackingService {
       },
     });
 
-    console.log(`[TRACKING_EVENT_RECEIVED] Token: ${token} Category: ${category} Recipient: ${recipient.email}`);
+    console.log(`[TRACKING_EVENT_RECEIVED] TokenHash: ${tokenHashLog} Classification: ${classification} Source: ${source} Recipient: ${recipient.email}`);
 
-    // 5. Update recipient summary statistics (Only increment open counts for RECIPIENT_OPENs)
-    if (category === 'RECIPIENT_OPEN') {
+    // 6. Update recipient summary statistics (Only increment open counts for DETECTED_OPENs)
+    if (classification === 'DETECTED_OPEN') {
       await this.prisma.trackedRecipient.update({
         where: { id: recipient.id },
         data: {

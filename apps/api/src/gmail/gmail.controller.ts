@@ -90,23 +90,61 @@ export class SendOrchestrator {
 
     // Resolve reply headers using Gmail API if threadId is provided
     if (activeGmailThreadId) {
-      try {
-        const resolved = await this.gmailService.resolveReplyHeaders(userId, authoritativeFromEmail, activeGmailThreadId);
-        if (resolved.inReplyTo) {
-          resolvedInReplyTo = resolved.inReplyTo;
+      // 1. Fetch thread metadata & validate it belongs to the authenticated user
+      const thread = await this.gmailService.getThreadMetadata(userId, authoritativeFromEmail, activeGmailThreadId);
+      if (!thread || !thread.messages || thread.messages.length === 0) {
+        throw new HttpException(
+          `Failed to resolve Gmail thread with ID: ${activeGmailThreadId}. The thread may not exist or does not belong to this account.`,
+          HttpStatus.BAD_REQUEST
+        );
+      }
+
+      // 2. Determine the newest message in the thread using internalDate
+      const lastMsg = this.gmailService.getLatestThreadMessage(thread);
+      if (!lastMsg) {
+        throw new HttpException(
+          `No messages found in Gmail thread with ID: ${activeGmailThreadId}. Thread cannot be replied to.`,
+          HttpStatus.BAD_REQUEST
+        );
+      }
+
+      // 3. Extract Message-ID and References
+      let lastMessageId: string | undefined;
+      let lastReferences: string | undefined;
+      lastMsg.payload?.headers?.forEach((header: any) => {
+        if (header.name?.toLowerCase() === 'message-id') {
+          lastMessageId = header.value ?? undefined;
         }
-        if (resolved.references) {
-          resolvedReferences = resolved.references;
+        if (header.name?.toLowerCase() === 'references') {
+          lastReferences = header.value ?? undefined;
         }
-        if (resolved.subject) {
-          activeSubject = resolved.subject;
-          // Ensure it has Re: prefix if it doesn't already
-          if (activeSubject && !/^re:/i.test(activeSubject)) {
-            activeSubject = `Re: ${activeSubject}`;
-          }
+      });
+
+      if (!lastMessageId) {
+        throw new HttpException(
+          `Could not extract Message-ID from the latest message in thread ${activeGmailThreadId}. Thread cannot be replied to safely.`,
+          HttpStatus.BAD_REQUEST
+        );
+      }
+
+      resolvedInReplyTo = lastMessageId;
+      resolvedReferences = lastReferences
+        ? `${lastReferences} ${lastMessageId}`
+        : lastMessageId;
+
+      // Extract thread subject from first message
+      let threadSubject: string | undefined;
+      thread.messages[0]?.payload?.headers?.forEach((header: any) => {
+        if (header.name?.toLowerCase() === 'subject') {
+          threadSubject = header.value ?? undefined;
         }
-      } catch (err) {
-        console.warn(`[GMAIL_THREADING] Failed resolving reply headers for thread ${activeGmailThreadId}:`, err);
+      });
+
+      if (threadSubject) {
+        activeSubject = threadSubject;
+        if (!/^re:/i.test(activeSubject)) {
+          activeSubject = `Re: ${activeSubject}`;
+        }
       }
     }
 
@@ -140,10 +178,16 @@ export class SendOrchestrator {
       // Generate distinct Message-ID header for this specific outbound copy
       const messageIdHeader = `<copy-${crypto.randomBytes(12).toString('hex')}@mail.gmail.com>`;
 
-      // Assemble RFC 2822 MIME
+      // Assemble RFC 2822 MIME where:
+      // - To header contains only this specific recipient (and displayName if present).
+      // - Cc and Bcc are omitted entirely.
+      const toHeader = recipient.displayName
+        ? `${recipient.displayName} <${recipient.email}>`
+        : recipient.email;
+
       const mime = this.gmailService.buildMimeMessage({
         from: authoritativeFromEmail,
-        to: recipient.email,
+        to: toHeader,
         subject: activeSubject,
         messageIdHeader,
         inReplyTo: resolvedInReplyTo,
@@ -161,7 +205,8 @@ export class SendOrchestrator {
           mime,
           activeGmailThreadId || undefined
         );
-        console.log(`[GMAIL_SEND_SUCCESS] MessageID: ${sendResult.gmailMessageId} Recipient: ${recipient.email}`);
+        const tokenHashLog = crypto.createHash('sha256').update(trackingToken).digest('hex').slice(0, 12);
+        console.log(`[GMAIL_SEND_SUCCESS] MessageID: ${sendResult.gmailMessageId} Recipient: ${recipient.email} TokenHash: ${tokenHashLog}`);
       } catch (error: unknown) {
         const err = error as Error;
         console.error(`[GMAIL_SEND_FAILURE] Recipient: ${recipient.email} Error: ${err.message}`);

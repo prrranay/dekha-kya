@@ -29,6 +29,18 @@ enum OpenCategory {
   UNKNOWN_OPEN
 }
 
+enum TrackingEventSource {
+  GOOGLE_PROXY
+  DIRECT
+  UNKNOWN
+}
+
+enum TrackingEventClassification {
+  DETECTED_OPEN
+  SELF_OPEN
+  UNKNOWN_OPEN
+}
+
 model User {
   id           String         @id @default(uuid())
   googleId     String         @unique
@@ -119,18 +131,45 @@ model TrackedRecipient {
 }
 
 model TrackingEvent {
-  id                 String            @id @default(uuid())
+  id                 String                      @id @default(uuid())
   trackedRecipientId String
   type               TrackingEventType
   category           OpenCategory
-  timestamp          DateTime          @default(now())
+  source             TrackingEventSource         @default(UNKNOWN)
+  classification     TrackingEventClassification @default(UNKNOWN_OPEN)
+  timestamp          DateTime                    @default(now())
   userAgent          String?
   ipHash             String?
   referer            String?
-  createdAt          DateTime          @default(now())
+  createdAt          DateTime                    @default(now())
 
-  trackedRecipient   TrackedRecipient  @relation(fields: [trackedRecipientId], references: [id], onDelete: Cascade)
+  trackedRecipient   TrackedRecipient            @relation(fields: [trackedRecipientId], references: [id], onDelete: Cascade)
 
   @@index([trackedRecipientId])
   @@index([createdAt])
 }
+
+model HandoffToken {
+  id          String    @id @default(uuid())
+  tokenHash   String    @unique
+  userId      String
+  expiresAt   DateTime
+  consumedAt  DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([tokenHash])
+}
+
+model ExtensionSession {
+  jti         String    @id
+  userId      String
+  expiresAt   DateTime
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  lastSeenAt  DateTime  @default(now())
+  browser     String?
+  version     String?
+
+  @@index([userId])
+}
+

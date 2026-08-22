@@ -20,6 +20,7 @@ interface StatsData {
   totalDetectedOpens: number;
   recentEvents: RecentEvent[];
   gmailConnected?: boolean;
+  extensionLastSeenAt?: string | null;
 }
 
 const API_BASE_URL = `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000'}/api`;
@@ -39,17 +40,81 @@ export default function DashboardPage() {
     refetchInterval: 5000, // Poll every 5 seconds for live activity logs
   });
 
-  const [extensionActive, setExtensionActive] = React.useState(false);
+  // Real health check for tracking endpoint/API reachability
+  const { data: healthData } = useQuery({
+    queryKey: ['trackingHealth'],
+    queryFn: async () => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/auth/status`, { credentials: 'include' });
+        return { reachable: res.ok };
+      } catch (e) {
+        return { reachable: false };
+      }
+    },
+    refetchInterval: 10000,
+  });
 
+  // Handoff linkage flow
   React.useEffect(() => {
-    const checkExtension = () => {
-      const active = document.documentElement.hasAttribute('data-dekha-kya-extension');
-      setExtensionActive(active);
+    const handleHandoff = async () => {
+      // Check if extension indicator is present in DOM
+      const hasExtension = document.documentElement.hasAttribute('data-dekha-kya-extension');
+      if (!hasExtension) return;
+
+      try {
+        const res = await fetch(`${API_BASE_URL}/auth/extension/handoff`, { method: 'POST', credentials: 'include' });
+        if (!res.ok) return;
+        const result = await res.json();
+        if (result && result.rawToken) {
+          // Dispatch via postMessage to window using configured origin
+          window.postMessage(
+            { type: 'DEKHA_KYA_HANDOFF', token: result.rawToken },
+            window.location.origin
+          );
+        }
+      } catch (e) {
+        console.error('Failed to trigger extension handoff:', e);
+      }
     };
-    checkExtension();
-    const interval = setInterval(checkExtension, 1000);
-    return () => clearInterval(interval);
+
+    // Trigger handoff on page load
+    handleHandoff();
+
+    // Listen for new handoff requests from the extension (e.g. on token expiration)
+    const messageListener = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin) return;
+      if (event.data && event.data.type === 'DEKHA_KYA_REQUEST_HANDOFF') {
+        handleHandoff();
+      }
+    };
+
+    window.addEventListener('message', messageListener);
+    return () => window.removeEventListener('message', messageListener);
   }, []);
+
+  const getExtensionStatus = (lastSeenAt: string | undefined | null) => {
+    if (!lastSeenAt) return { text: 'Not detected', color: 'text-amber-600 bg-amber-50' };
+    const diffMs = Date.now() - new Date(lastSeenAt).getTime();
+    const diffMins = diffMs / 60000;
+    const diffSecs = Math.floor(diffMs / 1000);
+
+    if (diffSecs < 120) {
+      return {
+        text: `Connected (Last seen: ${diffSecs}s ago)`,
+        color: 'text-emerald-600 bg-emerald-50'
+      };
+    } else if (diffMins < 10) {
+      return {
+        text: `Recently active (Last seen: ${Math.floor(diffMins)}m ago)`,
+        color: 'text-amber-600 bg-amber-50'
+      };
+    } else {
+      return {
+        text: `Not detected (Last seen: ${Math.floor(diffMins)}m ago)`,
+        color: 'text-red-600 bg-red-50'
+      };
+    }
+  };
 
   if (isLoading) {
     return (
@@ -92,11 +157,11 @@ export default function DashboardPage() {
       description: 'Emails sent with active tracking pixels',
     },
     {
-      name: 'Emails opened',
+      name: 'Emails with detected opens',
       value: data.openedEmails.toString(),
       icon: MailOpen,
       color: 'text-emerald-600 bg-emerald-50',
-      description: 'At least one recipient opened the email',
+      description: 'At least one recipient had a detected open',
     },
     {
       name: 'Total detected opens',
@@ -205,19 +270,21 @@ export default function DashboardPage() {
             <div className="space-y-3 pt-2">
               <div className="flex items-center justify-between text-xs border-b border-zinc-100 pb-2">
                 <span className="text-zinc-500">Chrome Extension</span>
-                <span className={`font-semibold px-2 py-0.5 rounded-full ${extensionActive ? 'text-emerald-600 bg-emerald-50' : 'text-amber-600 bg-amber-50'}`}>
-                  {extensionActive ? 'Active' : 'Inactive'}
+                <span className={`font-semibold px-2 py-0.5 rounded-full ${getExtensionStatus(data?.extensionLastSeenAt).color}`}>
+                  {getExtensionStatus(data?.extensionLastSeenAt).text}
                 </span>
               </div>
               <div className="flex items-center justify-between text-xs border-b border-zinc-100 pb-2">
                 <span className="text-zinc-500">Gmail API Status</span>
                 <span className={`font-semibold px-2 py-0.5 rounded-full ${data.gmailConnected ? 'text-emerald-600 bg-emerald-50' : 'text-red-600 bg-red-50'}`}>
-                  {data.gmailConnected ? 'Synchronized' : 'Disconnected'}
+                  {data.gmailConnected ? 'Connected' : 'Disconnected'}
                 </span>
               </div>
               <div className="flex items-center justify-between text-xs border-b border-zinc-100 pb-2">
-                <span className="text-zinc-500">Encryption Method</span>
-                <span className="font-semibold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full">AES-256-GCM</span>
+                <span className="text-zinc-500">Tracking Endpoint</span>
+                <span className={`font-semibold px-2 py-0.5 rounded-full ${healthData?.reachable ? 'text-emerald-600 bg-emerald-50' : 'text-red-600 bg-red-50'}`}>
+                  {healthData?.reachable ? 'Reachable' : 'Unreachable'}
+                </span>
               </div>
             </div>
           </div>
@@ -233,3 +300,4 @@ export default function DashboardPage() {
     </div>
   );
 }
+

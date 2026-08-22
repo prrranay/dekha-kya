@@ -295,12 +295,18 @@ export class ThreadService {
       where: { userId },
     });
 
+    const latestSession = await this.prisma.extensionSession.findFirst({
+      where: { userId },
+      orderBy: { lastSeenAt: 'desc' },
+    });
+
     return {
       totalTracked,
       openedEmails: openedThreadsCount,
       totalDetectedOpens: totalOpens,
       recentEvents: mappedRecent,
       gmailConnected: !!gmailAccount,
+      extensionLastSeenAt: latestSession ? latestSession.lastSeenAt.toISOString() : null,
     };
   }
 }

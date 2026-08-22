@@ -54,9 +54,5 @@ export class SendMailDto {
   @IsString()
   @IsOptional()
   references?: string;
-
-  @ApiProperty({ description: 'Sender Gmail email address', example: 'sender@gmail.com' })
-  @IsString()
-  @IsNotEmpty()
-  fromEmail!: string;
 }
+
