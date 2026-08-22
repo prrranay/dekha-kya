@@ -290,6 +290,7 @@ export class AuthController {
       return {
         api: true,
         authenticated: true,
+        email: user.email,
       };
     } catch (error) {
       return { api: true, authenticated: false };
