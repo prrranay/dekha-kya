@@ -3,8 +3,8 @@ import { Outfit } from 'next/font/google';
 import './globals.css';
 import Providers from './providers';
 import Link from 'next/link';
-import { LayoutDashboard, Mail, Settings, Bell } from 'lucide-react';
-import { ApiLinkStatus, UserFooter } from './nav-widgets';
+import { LayoutDashboard, Mail, Settings } from 'lucide-react';
+import { ApiLinkStatus, UserFooter, NotificationBell } from './nav-widgets';
 
 const outfit = Outfit({
   subsets: ['latin'],
@@ -75,10 +75,7 @@ export default function RootLayout({
             <header className="h-16 bg-white border-b border-zinc-200 flex items-center justify-between px-8 shrink-0">
               <ApiLinkStatus />
               <div className="flex items-center gap-4">
-                <button className="p-2 text-zinc-500 hover:text-zinc-700 rounded-lg hover:bg-zinc-100 transition-premium relative">
-                  <Bell className="w-4 h-4" />
-                  <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-indigo-600"></span>
-                </button>
+                <NotificationBell />
               </div>
             </header>
 

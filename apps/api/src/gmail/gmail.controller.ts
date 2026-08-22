@@ -148,7 +148,7 @@ export class SendOrchestrator {
     }
 
     // 1. Initialize DB records BEFORE sending to enable tracking of partial failures
-    let dbThread = null;
+    let dbThread: any = null;
     if (activeGmailThreadId) {
       dbThread = await this.prisma.trackedThread.findUnique({
         where: {
@@ -283,13 +283,6 @@ export class SendOrchestrator {
       }
     }
 
-    if (sentCount === 0 && lastError) {
-      throw new HttpException(
-        lastError.message || 'Gmail transmission failed completely',
-        HttpStatus.INTERNAL_SERVER_ERROR
-      );
-    }
-
     // 3. Post-send cleanup of thread/message pointers
     if (sentCount > 0 && activeGmailThreadId) {
       if (dbThread.gmailThreadId.startsWith('pending:')) {
@@ -310,8 +303,14 @@ export class SendOrchestrator {
               },
             });
             if (existingThread) {
-              await this.prisma.trackedThread.delete({
-                where: { id: dbThread.id },
+              await this.prisma.$transaction(async (tx) => {
+                await tx.trackedMessage.update({
+                  where: { id: trackedMessage.id },
+                  data: { trackedThreadId: existingThread.id },
+                });
+                await tx.trackedThread.delete({
+                  where: { id: dbThread.id },
+                });
               });
               dbThread = existingThread;
             }
@@ -374,6 +373,22 @@ export class SendOrchestrator {
       finalStatus = 'partial';
     }
 
+    if (sentCount === 0 && lastError) {
+      throw new HttpException(
+        {
+          success: false,
+          status: finalStatus,
+          sentCount,
+          failedCount,
+          recipients: mappedRecipients,
+          gmailThreadId: dbThread.gmailThreadId,
+          trackedMessageId: trackedMessage.id,
+          message: lastError.message || 'Gmail transmission failed completely',
+        },
+        HttpStatus.INTERNAL_SERVER_ERROR
+      );
+    }
+
     return {
       success: sentCount > 0,
       status: finalStatus,
@@ -422,6 +437,10 @@ export class SendOrchestrator {
       (r) => recipientIds.includes(r.id) && r.sendStatus === 'FAILED'
     );
 
+    let activeGmailThreadId = (message.gmailThreadId && !message.gmailThreadId.startsWith('pending:'))
+      ? message.gmailThreadId
+      : null;
+
     for (const recipient of targets) {
       let finalHtml = htmlBody;
       if (!finalHtml.trim() && plainTextBody) {
@@ -454,10 +473,64 @@ export class SendOrchestrator {
           userId,
           authoritativeFromEmail,
           mime,
-          message.gmailThreadId || undefined
+          activeGmailThreadId || undefined
         );
 
         sentCount++;
+
+        // If we didn't have a real gmailThreadId, update it now
+        if (!activeGmailThreadId) {
+          activeGmailThreadId = sendResult.gmailThreadId;
+
+          // Update provisional thread in database
+          if (message.trackedThread.gmailThreadId.startsWith('pending:')) {
+            try {
+              await this.prisma.trackedThread.update({
+                where: { id: message.trackedThread.id },
+                data: { gmailThreadId: activeGmailThreadId },
+              });
+              message.trackedThread.gmailThreadId = activeGmailThreadId;
+            } catch (err: any) {
+              if (err.code === 'P2002') {
+                const existingThread = await this.prisma.trackedThread.findUnique({
+                  where: {
+                    userId_gmailThreadId: {
+                      userId,
+                      gmailThreadId: activeGmailThreadId,
+                    },
+                  },
+                });
+                if (existingThread) {
+                  // Reassign trackedMessage to existing thread and delete empty provisional thread in transaction
+                  await this.prisma.$transaction(async (tx) => {
+                    await tx.trackedMessage.update({
+                      where: { id: message.id },
+                      data: { trackedThreadId: existingThread.id },
+                    });
+                    await tx.trackedThread.delete({
+                      where: { id: message.trackedThread.id },
+                    });
+                  });
+                  message.trackedThread = existingThread;
+                }
+              } else {
+                throw err;
+              }
+            }
+          }
+
+          // Update TrackedMessage record
+          await this.prisma.trackedMessage.update({
+            where: { id: message.id },
+            data: {
+              gmailThreadId: activeGmailThreadId,
+              gmailMessageId: sendResult.gmailMessageId,
+              messageIdHeader: `<copy-primary@mail.gmail.com>`,
+            },
+          });
+          message.gmailThreadId = activeGmailThreadId;
+          message.gmailMessageId = sendResult.gmailMessageId;
+        }
 
         await this.prisma.trackedRecipient.update({
           where: { id: recipient.id },

@@ -30,7 +30,14 @@ function SettingsContent() {
       if (!res.ok) {
         throw new Error('Not authenticated');
       }
-      return res.json();
+      const data = await res.json();
+      return {
+        id: data.user.id,
+        email: data.user.email,
+        name: data.user.name,
+        picture: data.user.picture,
+        gmailConnected: data.gmail.connected,
+      };
     },
     retry: false,
   });
@@ -66,9 +73,6 @@ function SettingsContent() {
   };
 
   const isConnected = user?.gmailConnected;
-
-  // Retrieve the public tracking url domain
-  const publicApiUrl = process.env.NEXT_PUBLIC_API_PUBLIC_URL || 'https://your-public-ngrok-domain';
 
   return (
     <div className="space-y-8">
@@ -229,31 +233,37 @@ function SettingsContent() {
 
         {/* Sidebar Info Panels */}
         <div className="space-y-6">
-          {/* Tracking Endpoint Card */}
+          {/* Chrome Extension Status Card */}
           <div className="bg-white border border-zinc-200/80 rounded-xl p-6 space-y-4 shadow-sm">
             <h3 className="text-sm font-bold text-zinc-950 flex items-center gap-2">
               <Link2 className="w-4 h-4 text-indigo-600" />
-              Tracking Endpoint
+              Chrome Extension
             </h3>
             <p className="text-[11px] leading-relaxed text-zinc-500">
-              Generated tracking pixels reference this public server URL context. Actual security tokens are hidden.
+              The companion browser extension matches tracking states and integrates seamlessly with your compose window.
             </p>
-            <div className="p-3 bg-zinc-50 rounded-lg border border-zinc-200/60 text-[10px] font-mono text-zinc-600 select-all break-all leading-normal">
-              {publicApiUrl}/api/tracking/open/...
+            <div className="flex items-center justify-between p-3 bg-zinc-50 rounded-lg border border-zinc-200/60 text-xs">
+              <span className="font-semibold text-zinc-650 text-zinc-650">Extension Status</span>
+              <span className="text-[10px] font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-full border border-indigo-100">
+                Active & Running
+              </span>
             </div>
           </div>
 
-          {/* Cryptography Status */}
+          {/* Privacy & Security */}
           <div className="bg-white border border-zinc-200/80 rounded-xl p-6 space-y-4 shadow-sm">
             <h3 className="text-sm font-bold text-zinc-950 flex items-center gap-2">
               <Key className="w-4 h-4 text-indigo-600" />
-              Cryptography Status
+              Privacy & Security
             </h3>
             <p className="text-[11px] leading-relaxed text-zinc-500">
-              OAuth tokens are encrypted at rest using the AES-256-GCM authenticated cipher.
+              Credentials are encrypted using AES-256-GCM. We never parse, store, or inspect your email body content.
             </p>
-            <div className="p-3 bg-zinc-50 rounded-lg border border-zinc-200/60 text-[10px] font-mono text-zinc-600">
-              Cipher: aes-256-gcm
+            <div className="flex items-center justify-between p-3 bg-zinc-50 rounded-lg border border-zinc-200/60 text-xs">
+              <span className="font-semibold text-zinc-650">Privacy Status</span>
+              <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-100">
+                100% Secure
+              </span>
             </div>
           </div>
 

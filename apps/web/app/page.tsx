@@ -63,7 +63,7 @@ export default function DashboardPage() {
         return { reachable: false };
       }
     },
-    refetchInterval: 10000,
+    refetchInterval: 30000,
   });
 
   // Separate Tracking Endpoint health check
@@ -77,7 +77,7 @@ export default function DashboardPage() {
         return { reachable: false };
       }
     },
-    refetchInterval: 10000,
+    refetchInterval: 30000,
   });
 
   const handoffInProgressRef = React.useRef(false);

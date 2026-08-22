@@ -15,7 +15,14 @@ function SessionGate({ children }: { children: React.ReactNode }) {
       if (!res.ok) {
         throw new Error('Unauthorized');
       }
-      return res.json();
+      const data = await res.json();
+      return {
+        id: data.user.id,
+        email: data.user.email,
+        name: data.user.name,
+        picture: data.user.picture,
+        gmailConnected: data.gmail.connected,
+      };
     },
     retry: false,
   });
